@@ -1,0 +1,602 @@
+{
+  "test_date": "2026-09-15",
+  "sample": "Cascy.casc (locally installed, not redistributed)",
+  "tool_count": 36,
+  "checks": [
+    {
+      "body_rotation_degrees": 7.959455491010312
+    },
+    {
+      "index_rotation_degrees": 29.999997960826597
+    },
+    "body and fingertip change at keys",
+    "inbetween poses are finite",
+    "fingertip returns to start",
+    "five full-body renders returned as MCP image content",
+    "open and curled hand closeups returned as MCP images",
+    "native scene saved and animation FBX exported",
+    "saved scene reopened and frame-24 positions match"
+  ],
+  "capabilities": {
+    "api_version": "dev",
+    "tools": [
+      {
+        "name": "Retargeting",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "AnimationUnbakingTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "AnimationUnbakingTool",
+        "editor_methods": [
+          "get_interpolation_difference"
+        ]
+      },
+      {
+        "name": "InbetweeningTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "InbetweeningTool",
+        "editor_methods": [
+          "get_update_parameter",
+          "set_update_parameter"
+        ]
+      },
+      {
+        "name": "MocapTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "FixCollisionsTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "RiggingModeTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "RiggingModeTool",
+        "editor_methods": [
+          "erase_joints_data",
+          "erase_layer_id_by_object_ids",
+          "erase_layers_ids",
+          "erase_preserved_data",
+          "erase_preserved_object_ids",
+          "erase_preserved_setting",
+          "get_joints_data",
+          "get_layer_id_by_object_ids",
+          "get_layers_ids",
+          "get_preserved_data",
+          "get_preserved_object_ids",
+          "get_preserved_setting",
+          "set_joints_data",
+          "set_layers_ids",
+          "set_preserved_data",
+          "set_preserved_object_ids",
+          "set_preserved_setting",
+          "set_undo_redo_context"
+        ]
+      },
+      {
+        "name": "Hotkeys",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "PythonConsole",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "AutoPosingTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "AutoPosingTool",
+        "editor_methods": [
+          "activate",
+          "add",
+          "deactivate",
+          "update"
+        ]
+      },
+      {
+        "name": "LinkedScenes",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "ShowFulcrumPointsTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "ViewActionCreatorTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "CompositionTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "RenderToFile",
+        "methods": [
+          "play_to_images_sequence",
+          "play_to_video_file",
+          "take_image"
+        ]
+      },
+      {
+        "name": "DefaultFbxSynchronizationTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "NodeEditorTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "AnimationLayersTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "CameraOrientationTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "MirrorTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "MirrorTool",
+        "editor_methods": [
+          "core"
+        ]
+      },
+      {
+        "name": "FixFootTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "AttractorTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "AttractorTool",
+        "editor_methods": [
+          "get_general_settings",
+          "is_only_key_frames"
+        ]
+      },
+      {
+        "name": "EventSystem",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "GlbSceneLoader",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "LogDeleter",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "UsdSceneLoader",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "Scene",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "Sf3Loader",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "ViewGridTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "FbxSceneLoader",
+        "methods": [
+          "editor",
+          "export_fbx_scene",
+          "get_fbx_loader",
+          "import_fbx_animation",
+          "import_fbx_scene",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "DomainStateController",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "LayerHierarchyCopier",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "OutlinerTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "AnimationDataCopier",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "CopierTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "TopologyController",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "TrajectoryTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "Trajectory",
+        "editor_methods": [
+          "activate",
+          "deactivate"
+        ]
+      },
+      {
+        "name": "ObjectWatchingTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "Textures",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "SelectionGroupsTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SelectionGroups",
+        "editor_methods": [
+          "activate",
+          "core",
+          "deactivate",
+          "import_file"
+        ]
+      },
+      {
+        "name": "RiggingToolWindowTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "RiggingWindow",
+        "editor_methods": [
+          "create_from_qrt_by_content",
+          "create_from_qrt_by_fileName",
+          "generate_rig_elements",
+          "get_character_mirror_plane",
+          "get_is_create_autoposing",
+          "get_template_from_qrt",
+          "is_create_qrt",
+          "load_template_by_content",
+          "load_template_by_fileName",
+          "open_quick_rigging_tool",
+          "set_axis_after_qrt",
+          "set_character_mirror_plane",
+          "set_is_create_autoposing"
+        ]
+      },
+      {
+        "name": "BallisticTrajectoryTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "BallisticTrajectory",
+        "editor_methods": [
+          "activate",
+          "deactivate"
+        ]
+      },
+      {
+        "name": "LayersCopier",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "AnimationWithLayersCopier",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "SceneAutosaver",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "Audio",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "AutoPhysicsTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "AutoPhysicTool",
+        "editor_methods": [
+          "turn_off",
+          "turn_off_all_fulcrum_points"
+        ]
+      },
+      {
+        "name": "ViewportModesManager",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "Timeline",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "ControlPicker",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "ControlPicker",
+        "editor_methods": [
+          "activate",
+          "deactivate"
+        ]
+      },
+      {
+        "name": "GhostTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "DockingSystem",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "ViewportSelector",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "Gui",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      },
+      {
+        "name": "DataSourceManager",
+        "methods": [
+          "close_scene",
+          "load_scene",
+          "save_current_scene",
+          "save_scene",
+          "save_scene_as"
+        ]
+      },
+      {
+        "name": "ViewportsTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "NoneType",
+        "editor_methods": []
+      },
+      {
+        "name": "ManipulatorsTool",
+        "methods": [
+          "editor",
+          "name"
+        ],
+        "editor_type": "SceneTool",
+        "editor_methods": []
+      }
+    ],
+    "export_available": true,
+    "pro_features_available": false,
+    "scripting_enabled": true,
+    "note": "Available API members are discovered live. Presence does not prove successful execution or animation quality."
+  }
+}

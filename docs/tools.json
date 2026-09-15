@@ -1,0 +1,1438 @@
+[
+  {
+    "name": "cascadeur_status",
+    "description": "Check app heartbeat, workspace, bridge version and scripting opt-in without changing the scene.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_statusArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_capabilities",
+    "description": "Discover installed app tools, actual editor methods, license flags and limitations. Presence is not proof of execution.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_capabilitiesArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_get_state",
+    "description": "Inspect current scene, frame range, selection and object counts.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_get_stateArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_list_scenes",
+    "description": "List open scene tabs with current indices and names.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_list_scenesArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_activate_scene",
+    "description": "Activate a scene index returned by list_scenes. Refresh indices before use.",
+    "inputSchema": {
+      "properties": {
+        "index": {
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "index"
+      ],
+      "title": "cascadeur_activate_sceneArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_new_scene",
+    "description": "Create a new scene tab. Existing tabs are preserved.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_new_sceneArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_open_scene",
+    "description": "Open a .casc scene from an absolute path inside the workspace.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "cascadeur_open_sceneArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_save_scene",
+    "description": "Save a .casc checkpoint inside the workspace; requires overwrite=true to replace an existing file.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "cascadeur_save_sceneArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_list_objects",
+    "description": "Find objects by name substring and exact type, with stable IDs and pagination.",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "default": "",
+          "title": "Query",
+          "type": "string"
+        },
+        "object_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Type"
+        },
+        "offset": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Offset",
+          "type": "integer"
+        },
+        "limit": {
+          "default": 100,
+          "maximum": 500,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "cascadeur_list_objectsArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_rig_summary",
+    "description": "Inspect body, Point and Box controls, joints and finger controller candidates. Names alone do not establish axes.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_rig_summaryArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_get_object",
+    "description": "Inspect an exact object's behaviours and data channels, including unavailable values. Read before editing properties.",
+    "inputSchema": {
+      "properties": {
+        "object": {
+          "title": "Object",
+          "type": "string"
+        },
+        "frame": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Frame",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "object"
+      ],
+      "title": "cascadeur_get_objectArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_get_pose",
+    "description": "Read local/global transforms at a frame. Rotations include WXYZ quaternions and Euler radians.",
+    "inputSchema": {
+      "properties": {
+        "objects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Objects",
+          "type": "array"
+        },
+        "frame": {
+          "default": 0,
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Frame",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "objects"
+      ],
+      "title": "cascadeur_get_poseArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_select_objects",
+    "description": "Select exact objects for context-sensitive actions. An empty list clears selection.",
+    "inputSchema": {
+      "properties": {
+        "objects": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Objects",
+          "type": "array"
+        }
+      },
+      "required": [
+        "objects"
+      ],
+      "title": "cascadeur_select_objectsArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_frame",
+    "description": "Move the timeline cursor. Read the returned frame because Cascadeur can clamp it.",
+    "inputSchema": {
+      "properties": {
+        "frame": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Frame",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "frame"
+      ],
+      "title": "cascadeur_set_frameArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_range",
+    "description": "Set playback boundaries. This does not allocate animation data or add keyframes.",
+    "inputSchema": {
+      "properties": {
+        "first": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "First",
+          "type": "integer"
+        },
+        "last": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Last",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "first",
+        "last"
+      ],
+      "title": "cascadeur_set_rangeArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_list_tracks",
+    "description": "List animation tracks, locks, visibility, keys and interpolation. Tracks differ from additive animation layers.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_list_tracksArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_select_frames",
+    "description": "Select an explicit track interval before physics, mirror, clipboard or timeline actions.",
+    "inputSchema": {
+      "properties": {
+        "tracks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Tracks",
+          "type": "array"
+        },
+        "first": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "First",
+          "type": "integer"
+        },
+        "last": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Last",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tracks",
+        "first",
+        "last"
+      ],
+      "title": "cascadeur_select_framesArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_keys",
+    "description": "Add or update keys and allocate animation data on explicit unlocked tracks.",
+    "inputSchema": {
+      "properties": {
+        "tracks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Tracks",
+          "type": "array"
+        },
+        "frames": {
+          "items": {
+            "maximum": 100000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Frames",
+          "type": "array"
+        },
+        "interpolation": {
+          "default": "BEZIER",
+          "enum": [
+            "BEZIER",
+            "CLAMPED_BEZIER",
+            "LOW_AMPLITUDE_BEZIER",
+            "LINEAR",
+            "STEP",
+            "FIXED"
+          ],
+          "title": "Interpolation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tracks",
+        "frames"
+      ],
+      "title": "cascadeur_set_keysArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_remove_keys",
+    "description": "Remove keys from explicit tracks. Frame 0 is protected; save a checkpoint first.",
+    "inputSchema": {
+      "properties": {
+        "tracks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Tracks",
+          "type": "array"
+        },
+        "frames": {
+          "items": {
+            "maximum": 100000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Frames",
+          "type": "array"
+        }
+      },
+      "required": [
+        "tracks",
+        "frames"
+      ],
+      "title": "cascadeur_remove_keysArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_interpolation",
+    "description": "Set outgoing interpolation at existing keys. Verify overshoot and intermediate poses after changing it.",
+    "inputSchema": {
+      "properties": {
+        "tracks": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Tracks",
+          "type": "array"
+        },
+        "frames": {
+          "items": {
+            "maximum": 100000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Frames",
+          "type": "array"
+        },
+        "interpolation": {
+          "enum": [
+            "BEZIER",
+            "CLAMPED_BEZIER",
+            "LOW_AMPLITUDE_BEZIER",
+            "LINEAR",
+            "STEP",
+            "FIXED"
+          ],
+          "title": "Interpolation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tracks",
+        "frames",
+        "interpolation"
+      ],
+      "title": "cascadeur_set_interpolationArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_pose",
+    "description": "Key body or finger controls in one edit. Position uses scene units, delta rotation uses degrees; rig solving can adjust values.",
+    "inputSchema": {
+      "$defs": {
+        "Transform": {
+          "additionalProperties": false,
+          "properties": {
+            "object": {
+              "description": "Exact object ID or unique name. Prefer Point/Box rig controls.",
+              "title": "Object",
+              "type": "string"
+            },
+            "space": {
+              "default": "local",
+              "enum": [
+                "local",
+                "global"
+              ],
+              "title": "Space",
+              "type": "string"
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Position"
+            },
+            "rotation_quaternion_wxyz": {
+              "anyOf": [
+                {
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rotation Quaternion Wxyz"
+            },
+            "rotation_delta_degrees": {
+              "anyOf": [
+                {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Post-multiply reference rotation by local XYZ delta, in degrees.",
+              "title": "Rotation Delta Degrees"
+            },
+            "reference_frame": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "title": "Reference Frame",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "object"
+          ],
+          "title": "Transform",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "frame": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Frame",
+          "type": "integer"
+        },
+        "transforms": {
+          "items": {
+            "$ref": "#/$defs/Transform"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Transforms",
+          "type": "array"
+        },
+        "interpolation": {
+          "default": "BEZIER",
+          "enum": [
+            "BEZIER",
+            "CLAMPED_BEZIER",
+            "LOW_AMPLITUDE_BEZIER",
+            "LINEAR",
+            "STEP",
+            "FIXED"
+          ],
+          "title": "Interpolation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frame",
+        "transforms"
+      ],
+      "title": "cascadeur_set_poseArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_animate_transforms",
+    "description": "Author body and finger animation in a batch. Delta rotations reference a pre-edit frame, default 0. Read poses and render to verify.",
+    "inputSchema": {
+      "$defs": {
+        "Keyframe": {
+          "additionalProperties": false,
+          "properties": {
+            "frame": {
+              "maximum": 100000,
+              "minimum": 0,
+              "title": "Frame",
+              "type": "integer"
+            },
+            "transforms": {
+              "items": {
+                "$ref": "#/$defs/Transform"
+              },
+              "maxItems": 200,
+              "minItems": 1,
+              "title": "Transforms",
+              "type": "array"
+            }
+          },
+          "required": [
+            "frame",
+            "transforms"
+          ],
+          "title": "Keyframe",
+          "type": "object"
+        },
+        "Transform": {
+          "additionalProperties": false,
+          "properties": {
+            "object": {
+              "description": "Exact object ID or unique name. Prefer Point/Box rig controls.",
+              "title": "Object",
+              "type": "string"
+            },
+            "space": {
+              "default": "local",
+              "enum": [
+                "local",
+                "global"
+              ],
+              "title": "Space",
+              "type": "string"
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Position"
+            },
+            "rotation_quaternion_wxyz": {
+              "anyOf": [
+                {
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Rotation Quaternion Wxyz"
+            },
+            "rotation_delta_degrees": {
+              "anyOf": [
+                {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ],
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Post-multiply reference rotation by local XYZ delta, in degrees.",
+              "title": "Rotation Delta Degrees"
+            },
+            "reference_frame": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "title": "Reference Frame",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "object"
+          ],
+          "title": "Transform",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "keyframes": {
+          "items": {
+            "$ref": "#/$defs/Keyframe"
+          },
+          "maxItems": 500,
+          "minItems": 1,
+          "title": "Keyframes",
+          "type": "array"
+        },
+        "interpolation": {
+          "default": "BEZIER",
+          "enum": [
+            "BEZIER",
+            "CLAMPED_BEZIER",
+            "LOW_AMPLITUDE_BEZIER",
+            "LINEAR",
+            "STEP",
+            "FIXED"
+          ],
+          "title": "Interpolation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "keyframes"
+      ],
+      "title": "cascadeur_animate_transformsArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_properties",
+    "description": "Edit discovered scalar/vector data channels. Advanced: can change rig/physics behavior. Read get_object first; no guessed names.",
+    "inputSchema": {
+      "$defs": {
+        "PropertyChange": {
+          "additionalProperties": false,
+          "properties": {
+            "object": {
+              "title": "Object",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "object",
+            "name",
+            "value"
+          ],
+          "title": "PropertyChange",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "frame": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Frame",
+          "type": "integer"
+        },
+        "properties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PropertyChange"
+          },
+          "minItems": 1,
+          "maxItems": 200,
+          "title": "Properties"
+        }
+      },
+      "required": [
+        "frame",
+        "properties"
+      ],
+      "title": "cascadeur_set_propertiesArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_sample_motion",
+    "description": "Sample global trajectories, path lengths and maximum step distances. Useful for drift/jumps; not an artistic quality score.",
+    "inputSchema": {
+      "properties": {
+        "objects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Objects",
+          "type": "array"
+        },
+        "first": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "First",
+          "type": "integer"
+        },
+        "last": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Last",
+          "type": "integer"
+        },
+        "step": {
+          "default": 1,
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Step",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "objects",
+        "first",
+        "last"
+      ],
+      "title": "cascadeur_sample_motionArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_mirror",
+    "description": "Mirror explicit controls at the current frame or selected interval. Requires valid mirror mappings on the rig.",
+    "inputSchema": {
+      "properties": {
+        "objects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Objects",
+          "type": "array"
+        },
+        "interval": {
+          "default": false,
+          "title": "Interval",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "objects"
+      ],
+      "title": "cascadeur_mirrorArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_view_mode",
+    "description": "Choose clean mesh review or a rig controller display mode for the active viewport.",
+    "inputSchema": {
+      "properties": {
+        "mode": {
+          "enum": [
+            "View",
+            "AutoPosing",
+            "PointController",
+            "Controller",
+            "Joint",
+            "Mesh"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "cascadeur_set_view_modeArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_get_camera",
+    "description": "Read the active viewport camera for restoring a view after hand/body closeups.",
+    "inputSchema": {
+      "properties": {},
+      "title": "cascadeur_get_cameraArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_set_camera",
+    "description": "Set the active viewport camera position/target in scene units.",
+    "inputSchema": {
+      "properties": {
+        "position": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Position"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        }
+      },
+      "title": "cascadeur_set_cameraArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_frame_objects",
+    "description": "Frame body or finger controls in the viewport for visual inspection.",
+    "inputSchema": {
+      "properties": {
+        "objects": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 200,
+          "minItems": 1,
+          "title": "Objects",
+          "type": "array"
+        }
+      },
+      "required": [
+        "objects"
+      ],
+      "title": "cascadeur_frame_objectsArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_capture_viewport",
+    "description": "Render a PNG of the active viewport and return it as an MCP image. Use distinct filenames per pose.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "width": {
+          "default": 1280,
+          "maximum": 3840,
+          "minimum": 64,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "default": 720,
+          "maximum": 2160,
+          "minimum": 64,
+          "title": "Height",
+          "type": "integer"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "cascadeur_capture_viewportArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_import_fbx",
+    "description": "Import an FBX from the workspace. Animation replaces matching rig data; save a checkpoint and inspect skeleton mappings.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "mode": {
+          "default": "scene",
+          "enum": [
+            "scene",
+            "animation",
+            "model"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "cascadeur_import_fbxArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_export_fbx",
+    "description": "Export FBX after checking app license. Verify the exported skeleton, frame range and axes in the receiving app.",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "mode": {
+          "default": "animation",
+          "enum": [
+            "scene",
+            "animation",
+            "selected"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "title": "Overwrite",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "cascadeur_export_fbxArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_list_actions",
+    "description": "List curated menu actions for physics, AutoPosing, retargeting, cycles, playback and visual review, with verification status.",
+    "inputSchema": {
+      "properties": {
+        "query": {
+          "default": "",
+          "title": "Query",
+          "type": "string"
+        }
+      },
+      "title": "cascadeur_list_actionsArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_run_action",
+    "description": "Dispatch a named action from list_actions on an explicitly named scene. Many are toggles or depend on selection/license. Dispatch is not verified success.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "expected_scene": {
+          "title": "Expected Scene",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "expected_scene"
+      ],
+      "title": "cascadeur_run_actionArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_inspect_api",
+    "description": "Read live Python API member names/signatures/docs without executing methods. Prefer this over guessing from stale stubs.",
+    "inputSchema": {
+      "properties": {
+        "root": {
+          "default": "csc",
+          "enum": [
+            "csc",
+            "scene",
+            "view",
+            "app",
+            "model",
+            "layers"
+          ],
+          "title": "Root",
+          "type": "string"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        },
+        "limit": {
+          "default": 80,
+          "maximum": 150,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "title": "cascadeur_inspect_apiArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "cascadeur_inspect_tool",
+    "description": "Inspect a discovered tool/editor and optional public attribute path. Exposes actual signatures for advanced scripts.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "editor": {
+          "default": true,
+          "title": "Editor",
+          "type": "boolean"
+        },
+        "path": {
+          "default": "",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "cascadeur_inspect_toolArguments",
+      "type": "object"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  }
+]
