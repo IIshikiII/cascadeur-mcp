@@ -743,17 +743,15 @@ AUTOPOSE_ANCHORS = (
 
 
 def autopose(scene, view, app, p, bridge_state):
-    """Re-solve key poses with AutoPosing: anchors become active (blue), the rest is predicted.
+    """Re-solve key poses with AutoPosing: anchors are active (blue), the rest is predicted.
 
     Verified mechanics: controllers are Tool_object_ids found via Select all in the AutoPosing
     viewport; switching the mode on syncs them to the rig pose; SwitchLock toggles selected
     controllers blue/green; Update regenerates the green ones from the blue ones.
-    The API exposes neither the mode nor lock state, so the bridge assumes the mode is off
-    between calls and remembers locked frames in <workspace>/.autopose_locks.json. A frame whose
-    anchors drift after Update is restored from a snapshot and reported as failed.
+    Lock state is not exposed and is inherited by keys created between locked keys, so each
+    frame is probed: Update without toggling; anchors that stay are already locked, anchors that
+    move are locked and Update runs again. Frames are restored from a snapshot when anchors drift.
     """
-    import json
-
     import csc
     import numpy as np
 
@@ -764,6 +762,8 @@ def autopose(scene, view, app, p, bridge_state):
     VM = csc.view.ViewportMode
     null = csc.model.ObjectId.null()
     anchors = list(p.get("anchors") or AUTOPOSE_ANCHORS)
+    release = [n for n in (p.get("release") or []) if n not in anchors]
+    limit = float(p.get("max_anchor_drift", 3.0))
     frames = [frame_number(f) for f in p["frames"]]
     if not frames or len(frames) > 200:
         raise ValueError("Provide 1 to 200 key frames.")
@@ -772,7 +772,7 @@ def autopose(scene, view, app, p, bridge_state):
         for o in mv.get_objects()
         if mv.get_object_type_name(o) == "Point"
     }
-    unknown = [n for n in anchors if n not in points]
+    unknown = [n for n in anchors + release if n not in points]
     if unknown:
         raise ValueError("Unknown anchor points: " + ", ".join(unknown))
     for f in frames:
@@ -782,13 +782,6 @@ def autopose(scene, view, app, p, bridge_state):
                 raise ValueError(
                     "Frame %d is not a key on the track of %s." % (f, name)
                 )
-    registry_path = bridge_state["workspace"] / ".autopose_locks.json"
-    try:
-        registry = json.loads(registry_path.read_text())
-    except (OSError, ValueError):
-        registry = {}
-    scene_key = view.name()
-    locked = set(registry.get(scene_key, []))
 
     def read(name, f):
         return np.array(dv.get_data_value(points[name], f), dtype=float).ravel()
@@ -834,6 +827,28 @@ def autopose(scene, view, app, p, bridge_state):
                 directions.append(t)
         return tools, by_name, directions
 
+    def attempt(f, toggle_names, toggle_directions, update=True):
+        """Mode on -> SwitchLock the named controllers -> Update -> mode off."""
+        am.call_action("AutoPosingTool.AutoPosing")  # on: controllers sync to the rig
+        try:
+            tools, by_name, directions = controllers(f)
+            if not tools:
+                raise RuntimeError("No AutoPosing controllers found for this rig.")
+            toggle = {by_name[n] for n in toggle_names if n in by_name}
+            if toggle_directions:
+                toggle |= set(directions)
+            if toggle:
+                select(toggle)
+                am.call_action("AutoPosingTool.SwitchLock")
+            if update:
+                am.call_action("AutoPosingTool.Update")
+            select(set())
+            return len(tools), [n for n in anchors if n not in by_name], len(toggle)
+        finally:
+            am.call_action(
+                "AutoPosingTool.AutoPosing"
+            )  # off: the pose stays in the rig
+
     report = []
     ui = toolbar_states(bridge_state)
     mode_checked = ui is not None and "AutoPosingTool.AutoPosing" in ui
@@ -845,47 +860,43 @@ def autopose(scene, view, app, p, bridge_state):
         for f in frames:
             scene.set_current_frame(f)
             before = {n: read(n, f) for n in points}
-            am.call_action(
-                "AutoPosingTool.AutoPosing"
-            )  # on: controllers sync to the rig pose
-            status = "ok"
-            try:
-                tools, by_name, directions = controllers(f)
-                if not tools:
-                    raise RuntimeError("No AutoPosing controllers found for this rig.")
-                missing = [n for n in anchors if n not in by_name]
-                lock = set()
-                if f not in locked:
-                    lock = {by_name[n] for n in anchors if n in by_name}
-                    if p.get("include_directions", True):
-                        lock |= set(directions)
-                    select(lock)
-                    am.call_action("AutoPosingTool.SwitchLock")
-                am.call_action("AutoPosingTool.Update")
-                select(set())
-            finally:
-                am.call_action(
-                    "AutoPosingTool.AutoPosing"
-                )  # off: the solved pose stays in the rig
+            count, missing, _ = attempt(
+                f, [], False
+            )  # probe: which anchors are active?
+            moved = {
+                n: float(np.linalg.norm(read(n, f) - before[n]))
+                for n in set(anchors) | set(release)
+            }
+            green = [n for n in anchors if moved[n] > limit]
+            # An active controller does not move at all during Update; release those.
+            blue_released = [n for n in release if moved[n] < 0.01]
+            status, toggled = "ok (anchors already active)", 0
+            if green or blue_released:
+                restore(before, f)
+                mostly_green = len(green) > len(anchors) // 2
+                count, missing, toggled = attempt(
+                    f, green + blue_released, mostly_green
+                )
+                if max(np.linalg.norm(read(n, f) - before[n]) for n in anchors) > limit:
+                    restore(before, f)
+                    attempt(
+                        f, green + blue_released, mostly_green, update=False
+                    )  # undo the lock toggle
+                    status = "restored: anchors still drift after locking"
+                else:
+                    status = "ok (toggled %d controllers, released %s)" % (
+                        toggled,
+                        blue_released,
+                    )
             after = {n: read(n, f) for n in points}
             moved = {n: float(np.linalg.norm(after[n] - before[n])) for n in points}
-            drift = max(moved[n] for n in anchors)
-            if lock:  # SwitchLock toggled them whatever happens next
-                locked.add(f)
-            if drift > float(p.get("max_anchor_drift", 3.0)):
-                restore(before, f)
-                status = (
-                    "restored: anchors drifted %.1f cm (lock state out of sync?)"
-                    % drift
-                )
             report.append(
                 dict(
                     frame=f,
                     status=status,
-                    controllers=len(tools),
-                    newly_locked=len(lock),
+                    controllers=count,
                     missing_anchors=missing,
-                    anchor_drift_cm=round(drift, 2),
+                    anchor_drift_cm=round(max(moved[n] for n in anchors), 2),
                     moved_cm={
                         n: round(v, 1)
                         for n, v in sorted(moved.items(), key=lambda x: -x[1])
@@ -895,8 +906,6 @@ def autopose(scene, view, app, p, bridge_state):
             )
     finally:
         dvp.set_mode_visualizers(VM.View)
-        registry[scene_key] = sorted(locked)
-        registry_path.write_text(json.dumps(registry, indent=1))
     ui = toolbar_states(bridge_state)
     return dict(
         frames=report,

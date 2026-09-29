@@ -163,6 +163,18 @@ the mode is switched on, and a lock remembers the position at lock time.
 before anchors are locked. Right after switching the mode on, writes to green points still stick, so a
 "does a write snap back" probe is not a reliable mode/lock test.
 
+**Lock state is inherited:** a key created between keys whose anchors are blue is blue too. A blind
+`SwitchLock` then unlocks them. `cascadeur_autopose` therefore probes every frame: Update without
+toggling; anchors that do not move are already active, anchors that move are locked and Update runs
+again; frames whose anchors still drift are restored. `release=[...]` makes points green (an active
+controller does not move at all during the probe Update) — e.g. release toe points on flight frames so
+the network orients the feet.
+
+Pitfall seen on the kick: per-frame network choices can disagree. A foot was twisted 177° around the
+shin on one key (toe direction flipped between neighbours). Check continuity numerically (toe direction
+in the pelvis frame per frame); fix the outlier by rotating the foot points around the shin axis toward
+the neighbours' direction, then lock it with `autopose`.
+
 ### `cascadeur_autopose` (server tool)
 
 `cascadeur_autopose(frames=[...], anchors=None, include_directions=True)` automates steps 2–5 per key frame
@@ -187,6 +199,10 @@ After editing `src/cascadeur_mcp/operations.py`, copy it to the generated app pa
   selector mode; it generates nothing by itself. `cascadeur_inbetween(first, last)` selects, runs and
   waits for the FIXED sections. No Motion Generation (trajectory-driven) settings exist in this build's
   Scene Settings — only an Inbetweening group.
+- AI in-betweens can add small head nods (≈7° dips between keys on the kick's recovery). In a FIXED
+  interval every frame holds its own pose, so per-frame edits without keys are possible: we re-set the
+  head's chest-relative orientation on each frame (`set_data_value` per frame) to remove the nod.
+- A 1-frame interval between adjacent keys reports STEP interpolation and cannot be changed; harmless.
 - `cascadeur_call_action` runs any of ~220 catalogued action IDs (interpolation and IK/FK/GR/fulcrum key
   types on current frame or interval, Tween Machine attract filters, copier, mirror, ghosts, ballistic
   trajectory, cycles, trajectory tool, visibility). File dialogs, exit, help and settings resets are

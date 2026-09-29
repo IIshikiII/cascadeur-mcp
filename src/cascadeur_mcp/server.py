@@ -290,6 +290,7 @@ def create_server(bridge: Bridge):
         frames: Frames,
         anchors: Annotated[list[str], Field(max_length=40)] | None = None,
         include_directions: bool = True,
+        release: Annotated[list[str], Field(max_length=40)] | None = None,
     ) -> dict:
         """Re-solve existing key poses with Cascadeur AutoPosing. Anchor points (default: hands, feet, toes, pelvis, chest, head) are locked as active controllers; knees, elbows, shoulders and spine are predicted by the network. Frames must already be keys. Returns per-frame displacements; render to verify."""
         return await call(
@@ -297,6 +298,7 @@ def create_server(bridge: Bridge):
             frames=frames,
             anchors=anchors,
             include_directions=include_directions,
+            release=release,
         )
 
     @server.tool(annotations=edit)
