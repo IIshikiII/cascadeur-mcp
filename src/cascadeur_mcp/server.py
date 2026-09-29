@@ -286,6 +286,25 @@ def create_server(bridge: Bridge):
         return await call("mirror", objects=objects, interval=interval)
 
     @server.tool(annotations=edit)
+    async def cascadeur_autopose(
+        frames: Frames,
+        anchors: Annotated[list[str], Field(max_length=40)] | None = None,
+        include_directions: bool = True,
+    ) -> dict:
+        """Re-solve existing key poses with Cascadeur AutoPosing. Anchor points (default: hands, feet, toes, pelvis, chest, head) are locked as active controllers; knees, elbows, shoulders and spine are predicted by the network. Frames must already be keys. Returns per-frame displacements; render to verify."""
+        return await call(
+            "autopose",
+            frames=frames,
+            anchors=anchors,
+            include_directions=include_directions,
+        )
+
+    @server.tool(annotations=read)
+    async def cascadeur_ui_state(query: str = "") -> dict:
+        """Read toolbar toggle states from Cascadeur's UI (e.g. AutoPosing mode, Physics Assistant), keyed by action ID. Requires the optional PySide6 bridge setup; returns available=false otherwise."""
+        return await call("ui_state", query=query)
+
+    @server.tool(annotations=edit)
     async def cascadeur_set_view_mode(
         mode: Literal[
             "View", "AutoPosing", "PointController", "Controller", "Joint", "Mesh"

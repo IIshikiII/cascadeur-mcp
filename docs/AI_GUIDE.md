@@ -10,6 +10,26 @@
 6. Author a few body poses, verify them, then add breakdowns and finger detail.
 7. Read intermediate poses and capture body and hand views. Save, reopen and inspect the export.
 
+## Field-tested essentials
+
+Full details: `docs/FIELD_NOTES.md` in the server repository. The short version:
+
+- Block ~10–20 key poses and let Cascadeur interpolate; dense per-frame keys are effectively baked and
+  Cascadeur's tools can no longer improve them.
+- Animate body **Point** controllers with global positions. On the bundled Cascy rig body Box rotations
+  are derived from points and deltas behave inconsistently. Cascy: Y up, faces +Z, right side is −X, cm.
+- Writing on a non-key frame is overwritten by interpolation. Key first.
+- Leave fingers un-keyed unless every box is calibrated (right hand curls on +X, left on −X, thumb1 on +Z).
+- Knees/elbows: prefer `cascadeur_autopose` (anchors in, AutoPosing solves the rest) over computing them.
+- Foot contacts are track key/interval fixation (`csc.layers.layer.Fixation.Fulcrum`), not the point
+  channel `Fulcrum State`.
+- Secondary Motion (UI) rewrites existing key values; on a keyed arm it made the wrist floppy.
+- `save_scene` to a new path renames the tab; pass the new name as `expected_scene`.
+- Viewport renders wait for a repaint; a minimized Cascadeur window never repaints. `capture_viewport`
+  un-minimizes it (without focus) — if a capture still times out, check the window.
+- `cascadeur_ui_state` (optional PySide6 bridge) reads real toggle states such as AutoPosing mode and
+  Physics Assistant; without it those states are unknown and menu actions are blind toggles.
+
 The server gives access to animation controls. It does not generate a finished performance on its own, judge aesthetics, or guarantee physically correct motion.
 
 ## What to use

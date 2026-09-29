@@ -51,7 +51,7 @@ def stop():
         _state = None
 
 
-def start(bridge_dir, workspace, allow_scripts=False):
+def start(bridge_dir, workspace, allow_scripts=False, pyside6_site=None):
     global _timer, _state
     directory = Path(bridge_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -72,13 +72,27 @@ def start(bridge_dir, workspace, allow_scripts=False):
         directory=directory,
         workspace=Path(workspace).expanduser().resolve(),
         allow_scripts=bool(allow_scripts),
+        pyside6_site=str(Path(pyside6_site).expanduser().resolve()) if pyside6_site else None,
         instance=uuid.uuid4().hex,
         last_status=0,
     )
     _state["workspace"].mkdir(parents=True, exist_ok=True)
+    if _state["pyside6_site"]:
+        _enable_pyside6(_state["pyside6_site"])
     _timer = _start_timer(50, _poll)
     _poll()
     print("Cascadeur MCP bridge started: " + str(directory))
+
+
+def _enable_pyside6(site):
+    """Make a PySide6 build bound to Cascadeur's own Qt importable (see docs/FIELD_NOTES.md)."""
+    import sys
+
+    if os.name == "nt":
+        os.add_dll_directory(site)  # python3.dll for the abi3 bindings
+        os.add_dll_directory(str(Path(sys.executable).parent))  # Cascadeur's Qt DLLs
+    if site not in sys.path:
+        sys.path.insert(0, site)
 
 
 class _QtTimer:
