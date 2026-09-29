@@ -94,8 +94,9 @@ Online docs: https://cascadeur.com/help/introduction (AutoPosing page: `/help/to
 
 ## 6. Contacts (fulcrums) and AutoPhysics
 
-- **Fulcrum = key/interval property of a track**, not the point channel `Fulcrum State` (setting that channel
-  did nothing). Verified way:
+Two independent contact mechanisms (both set by `cascadeur_set_contacts`):
+
+- **Fulcrum keys** — key/interval property of a track (the timeline's "fulcrum key"):
   ```python
   L = csc.layers.layer
   def change(section):
@@ -103,16 +104,34 @@ Online docs: https://cascadeur.com/help/introduction (AutoPosing page: `/help/to
       section.interval.common.fixation = L.Fixation.Fulcrum   # stays planted until next key (Free on take-off)
   model_editor.layers_editor().change_section(frame, layer_id, change)
   ```
-  Layer id by name: `[l for l in lv.all_layer_ids() if lv.header(l).name == 'Foot_L'][0]`.
-- `Timeline.Change to fulcrum key` via `run_action` did not change anything in our tests.
-- `csc.tools.AnimationPointsTypes(first, last, scene, csc.tools.StaticPointsTypes(scene, [CenterOfMass behaviour]))`
-  returned empty fulcrum sets even with fixation set — probably only filled during a physics solve (unverified).
-- AutoPhysics: `physics_preview_toggle` works (green physics ghost appears) but is a blind toggle; the state
-  is not readable. `physics_snap` via API produced no measurable change in our tests — let the user press
-  Snap. `AutoPhysicTool` editor only exposes `turn_off`.
-- **Secondary Motion** (UI, "can be applied only once") rewrites values in existing keys. On dense keys it
-  moved the whole wave amplitude into the wrist ("floppy sausage arm"). Apply it only to body tracks, not
-  to the keyed arm, or use sparse keys.
+  A whole track becomes fulcrum: pass toe/heel points only (`foot_MainPoint_*` lives on `Leg_*`, so the knee
+  would become a fulcrum too).
+- **Point `Fulcrum State`** (Object Properties > Fulcrum): 0 = automatic detection (point near the floor and
+  nearly still), 1 = Enforce, 2 = NotFulcrum. (An earlier note here claimed it did nothing — wrong; the check
+  used an API that only reports during a solve.)
+- With AutoPhysics on, the timeline shows a coloured strip: green = strong support, yellow = weak,
+  orange = ballistic (no fulcrums), grey = unused. Recognised fulcrums get green circles in the viewport.
+- `Timeline.Change to fulcrum key` via `run_action` needs a timeline key selection; prefer the tool.
+
+AutoPhysics (all verified 2026-09-29):
+
+- Toggle state is readable through the PySide6 bridge; `cascadeur_set_mode("physics", on)` is idempotent.
+- `cascadeur_physics_snap` works. With Secondary/Compensation/Separation motion or smoothing enabled,
+  Snap opens an **application-modal "Warning" QQuickView** ("...are intended to be applied only once...")
+  with Yes/No. Modal dialogs do not block the bridge: Qt timers keep firing inside the dialog's nested event
+  loop, so a single-shot QTimer (or a later MCP call) can press the button. "Yes" disables those features
+  after snapping. Measured on the kick: pelvis moved up to 23.6 cm in flight, planted foot ≤ 0.5 cm.
+- Physics Settings values live in the app settings (`%LOCALAPPDATA%\Nekki Limited\Cascadeur\Cascadeur_tools.ini`,
+  sections `[Physics]`, `[AutoPhysics]`, `[Secondary motion]`, ...). Read with
+  `view.get_setting_handler().get_bool_value(group, key)` / `get_float_value`; there is **no API setter**.
+  `cascadeur_physics_settings(set={...})` flips On/Off switches through the UI: switch the right panel to the
+  "Physics settings" tab, find the row's `BoolSwitcher` → two `CheckButton`s (Off/On), scroll the enclosing
+  `Flickable` so the button is in its viewport (clicks outside it hit nothing), click, re-read the setting.
+  Invoking `clicked()`/`accessiblePressAction()` does not update the setting; only a real (synthetic) click does.
+- Priority frames = animated `priority_frame` on the Center of Mass `AutoPhysics` behaviour (also
+  `frame_weight`, `rotation_blending`, `vertical_jerk`, `horizontal_jerk`); `cascadeur_physics_priority_frames`.
+- **Secondary Motion** rewrites values in existing keys. On dense keys it moved the whole wave amplitude
+  into the wrist ("floppy sausage arm"). Use sparse keys; it is applied once by Snap.
 
 ## 7. AutoPosing from a script — verified recipe
 
@@ -158,6 +177,34 @@ inverted knees on frames 36/39 became natural.
 After editing `src/cascadeur_mcp/operations.py`, copy it to the generated app package
 (`<setup>/app/cascadeur_mcp/`) — the running bridge hot-reloads `operations.py`/`actions.py` from there.
 `app_bridge.py` changes need the bridge restarted from the Cascadeur console.
+
+## 7b. AI Inbetweening and the action catalog
+
+- In Cascadeur 2025.2 the toolbar button with tooltip **"Inbetweening"** is bound to action
+  `View.MotionGeneration_Run`. With a timeline interval selected on the tracks (keys ≤ 120 frames apart)
+  it generates the in-betweens locally in a few seconds; the interval becomes **FIXED** interpolation
+  (per-frame generated poses). `Scene.Inbetween interpolation switcher` only switches the interpolation
+  selector mode; it generates nothing by itself. `cascadeur_inbetween(first, last)` selects, runs and
+  waits for the FIXED sections. No Motion Generation (trajectory-driven) settings exist in this build's
+  Scene Settings — only an Inbetweening group.
+- `cascadeur_call_action` runs any of ~220 catalogued action IDs (interpolation and IK/FK/GR/fulcrum key
+  types on current frame or interval, Tween Machine attract filters, copier, mirror, ghosts, ballistic
+  trajectory, cycles, trajectory tool, visibility). File dialogs, exit, help and settings resets are
+  excluded because modal file dialogs can block the app. `cascadeur_list_actions(catalog=true)` lists them.
+
+## 7c. UI automation rules (learned the hard way)
+
+- `QQuickWindow.grabWindow()` screenshots the whole UI (`cascadeur_ui_screenshot`): menus, panels,
+  timeline colours, physics status line ("AutoPhysics status: Iterations: 176, Termination: CONVERGENCE").
+- Synthetic click = `MouseMove` + `MouseButtonPress` + `MouseButtonRelease` sent to the item's window at
+  the item centre (`operations.click_item`). Without the move event the click is ignored.
+- Never call `QGuiApplication.processEvents()` from bridge code: nested event processing inside the bridge
+  timer was followed by a hung Cascadeur (main window vanished, process had to be killed).
+- Only one PySide wrapper per window survives; popups get deleted — skip `RuntimeError` when iterating
+  `topLevelWindows()`. Import `PySide6.QtQuick` before touching windows, otherwise they are typed as plain
+  `QWindow` without `contentItem()`.
+- Right-panel tabs (Outliner / Scene settings / Physics settings / Tween machine / Event log) only
+  instantiate their content when active — click the `TabButton` first.
 
 ## 8. Viewport capture
 
@@ -208,6 +255,40 @@ Win32 `SetTimer` and made several API calls optional. Status now:
 | `is_export_available`, `is_pro_features_available` | methods absent | no (reported as null) |
 | `DataViewer.get_data_name` | method absent | replaced by `get_data(id).name` |
 
+## 10a. Coverage of the Cascadeur feature set (docs: https://cascadeur.com/help)
+
+| Pipeline stage / feature | MCP route | Status |
+| --- | --- | --- |
+| Key poses (points/boxes) | `set_pose`, `animate_transforms` | verified |
+| AutoPosing (network re-solve of knees/elbows/spine) | `autopose`, `set_mode("autoposing")` | verified |
+| AutoPosing for fingers | `set_mode("autoposing_fingers")` | needs a 5-finger rig; Cascy's simplified hands are unsupported (docs) |
+| Interpolation types, IK/FK/GR keys, double keys | `set_interpolation`, `call_action(Timeline.*)` | verified via API; key-type actions dispatch only |
+| AI Inbetweening | `inbetween` | verified (local, seconds) |
+| Motion Generation (trajectory-driven) | — | not present in this 2025.2 build |
+| Tween Machine filters, Easing | `call_action(TweenMachine.*)`; easing is timeline UI only | dispatch only / not exposed |
+| Contacts: fulcrum keys + point fulcrum state | `set_contacts` | verified |
+| AutoPhysics preview, freeze, snap, priority frames | `set_mode`, `physics_snap`, `physics_priority_frames` | verified |
+| Physics corrector, smooth trajectory/rotation, compensation/separation/secondary motion | `physics_settings(set=...)` then `physics_snap` | verified (UI-driven) |
+| Ballistic trajectory / ghosts | `call_action(BallisticTrajectoryTool.*)` | dispatch only (tool hidden on the toolbar by default) |
+| Fulcrum motion cleaning (foot sliding) | `call_action("View.FixFoot")` | dispatch only |
+| Mirror, copy/paste, cycles | `mirror`, `call_action(Copier.*/Timeline.*cycle*)` | mirror verified; rest dispatch only |
+| Additive layers, graph editor, node editor, retargeting, mocap | windows/actions only | not automated |
+| Review: silhouette, ghosts, trajectories, full-UI screenshots | `call_action`, `ui_screenshot`, `capture_viewport` | verified |
+
+"Dispatch only" = the action runs, but its result must be checked with poses/renders.
+
+## 10b. Recommended pipeline for a high-quality shot
+
+1. `open_scene` a clean rig → `save_scene` a new name. Plan 10–20 key poses and contact intervals.
+2. Block key poses with `animate_transforms` (points, global positions; fingers only if calibrated).
+3. `autopose(frames=...)` on every key pose → natural knees/elbows/spine. Render key poses.
+4. `set_contacts` for feet (toe/heel points) over ground intervals; `physics_priority_frames` for 1–3
+   poses that must not change (e.g. the hit).
+5. `inbetween(first, last)` on intervals that need organic in-betweens (optional; makes them FIXED).
+6. `physics_settings` → choose corrector/smoothing/compensation/secondary; `set_mode("physics", true)`;
+   `ui_screenshot` to inspect the timeline strip and status; `physics_snap(answer="Yes")`.
+7. `sample_motion` before/after, check planted feet, render several frames; `save_scene`.
+
 ## 10. Log of experiments
 
 - Hand wave: dense procedural keys + smooth foot-drift correction; Secondary Motion made the arm floppy;
@@ -218,3 +299,8 @@ Win32 `SetTimer` and made several API calls optional. Status now:
   expansion); lock semantics from docs; full recipe verified; `cascadeur_autopose` added.
 - Minimized window explained the "stuck" viewport captures.
 - PySide6 6.5.1.1 loaded into Cascadeur's Qt; toolbar `active` states readable; `cascadeur_ui_state` added.
+- Docs crawl (~35 animation pages + full action ID list) → coverage table §10a. Added the action catalog,
+  idempotent modes, contacts, priority frames, physics settings writes via UI, physics snap with modal
+  dialog handling, AI inbetweening and full-UI screenshots; all verified live on the kick scene.
+- A Cascadeur hang (main window vanished) followed experiments that called `processEvents()` from the
+  bridge; the rule in §7c avoids it.

@@ -299,6 +299,127 @@ def create_server(bridge: Bridge):
             include_directions=include_directions,
         )
 
+    @server.tool(annotations=edit)
+    async def cascadeur_call_action(
+        action_id: str, expected_scene: str, answer: str | None = None
+    ) -> dict:
+        """Run any catalogued Cascadeur action by ID (see cascadeur_list_actions with catalog=true): interpolation/IK-FK/fulcrum keys on current frame or interval, tween machine, copier, mirror, ghosts, ballistic, cycles, trajectories, visibility. Set frame/selection first. `answer` presses a button (e.g. "Yes") in a modal dialog the action opens (PySide6 bridge)."""
+        return await call(
+            "call_action",
+            action_id=action_id,
+            expected_scene=expected_scene,
+            answer=answer,
+        )
+
+    @server.tool(annotations=edit)
+    async def cascadeur_set_mode(
+        mode: Literal[
+            "autoposing",
+            "physics",
+            "physics_frozen",
+            "fulcrum_points",
+            "autoposing_fingers",
+            "autoposing_additional_points",
+            "auto_interpolation_keys",
+            "auto_interpolation_intervals",
+        ],
+        on: bool,
+    ) -> dict:
+        """Set a toolbar mode (AutoPosing, AutoPhysics preview, frozen physics, ...) to an explicit state, verified through the UI. Unlike menu toggles this is idempotent. Requires the PySide6 bridge."""
+        return await call("set_mode", mode=mode, on=on)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_physics_settings(set: dict[str, bool] | None = None) -> dict:
+        """Read the Physics Settings panel (gravity, Physics corrector, smooth trajectory/rotation, compensation/separation/secondary motion, ragdoll ...) and optionally flip On/Off switches, e.g. {"Secondary motion": false}. Writes go through the UI (PySide6 bridge) and are verified."""
+        return await call("physics_settings", set=set or {})
+
+    @server.tool(annotations=edit)
+    async def cascadeur_physics_snap(answer: str = "Yes") -> dict:
+        """Enable AutoPhysics if needed and snap the animation to the physics result. With secondary features on, Cascadeur asks whether to disable them (they apply once): `answer` is pressed automatically ("Yes" disables them, "No" keeps them). Mark contacts and priority frames first; sample motion before/after and render to verify."""
+        return await call("physics_snap", answer=answer)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_set_contacts(
+        points: Annotated[list[str], Field(min_length=1, max_length=40)],
+        intervals: Annotated[
+            list[tuple[Frame, Frame]], Field(min_length=1, max_length=50)
+        ],
+        point_state: Literal["enforce", "auto", "never"] = "enforce",
+    ) -> dict:
+        """Mark ground contacts for AutoPhysics: fulcrum key+interval fixation on the tracks of the given points over each interval, and the points' Fulcrum State (enforce/auto/never) at interval ends. Pass toe/heel points (e.g. toe_MainPoint_l, foot_Self0Point_l): every point's whole track becomes a fulcrum track."""
+        return await call(
+            "set_contacts",
+            points=points,
+            intervals=[list(i) for i in intervals],
+            point_state=point_state,
+        )
+
+    @server.tool(annotations=edit)
+    async def cascadeur_physics_priority_frames(
+        frames: Frames, on: bool = True
+    ) -> dict:
+        """Mark key frames whose pose AutoPhysics must preserve (priority frames) or clear them. Few priority frames only; too many make the solve inaccurate."""
+        return await call("physics_priority_frames", frames=frames, on=on)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_inbetween(
+        first: Frame,
+        last: Frame,
+        tracks: Annotated[list[str], Field(max_length=200)] | None = None,
+        wait_seconds: Annotated[int, Field(ge=0, le=300)] = 60,
+    ) -> dict:
+        """Generate the in-betweens of an interval with Cascadeur's AI Inbetweening (toolbar "Inbetweening", action View.MotionGeneration_Run). Needs >= 2 keys, <= 120 frames apart. The interval becomes FIXED interpolation holding generated poses. Save first; render to verify."""
+        import asyncio as _asyncio
+
+        track_names = tracks or [
+            t["name"] for t in (await call("list_tracks"))["tracks"] if not t["locked"]
+        ]
+        await call("select_frames", tracks=track_names, first=first, last=last)
+        state = await call("get_state")
+        await call(
+            "call_action",
+            action_id="View.MotionGeneration_Run",
+            expected_scene=state["name"],
+        )
+        deadline = _asyncio.get_running_loop().time() + wait_seconds
+        sections = {}
+        while True:
+            tracks_now = (await call("list_tracks"))["tracks"]
+            sections = {
+                t["name"]: {
+                    k: v for k, v in t["sections"].items() if first <= int(k) < last
+                }
+                for t in tracks_now
+                if t["name"] in track_names
+            }
+            done = any("FIXED" in s.values() for s in sections.values())
+            if done or _asyncio.get_running_loop().time() > deadline:
+                break
+            await _asyncio.sleep(2)
+        return dict(generated=done, interval=[first, last], sections=sections)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_answer_dialog(button: str) -> dict:
+        """Press a button (e.g. "Yes", "No", "OK") in an open modal Cascadeur dialog; cascadeur_ui_state lists open dialogs. Requires the PySide6 bridge."""
+        return await call("answer_dialog", button=button)
+
+    @server.tool(annotations=read)
+    async def cascadeur_ui_screenshot(path: str) -> list[TextContent | ImageContent]:
+        """Capture the whole Cascadeur UI (menus, timeline, panels, physics ghost, dialogs) as PNG, not just the viewport. Requires the PySide6 bridge."""
+        result = await call("ui_screenshot", path=path)
+        main = [w for w in result["windows"] if w["main"]]
+        if not main:
+            raise ToolError("Main window not captured: %s" % result)
+        data = Path(main[0]["path"]).read_bytes()
+        return [
+            TextContent(type="text", text=json.dumps(result["windows"])),
+            ImageContent(
+                type="image",
+                mimeType="image/png",
+                data=base64.b64encode(data).decode(),
+            ),
+        ]
+
     @server.tool(annotations=read)
     async def cascadeur_ui_state(query: str = "") -> dict:
         """Read toolbar toggle states from Cascadeur's UI (e.g. AutoPosing mode, Physics Assistant), keyed by action ID. Requires the optional PySide6 bridge setup; returns available=false otherwise."""
@@ -384,9 +505,9 @@ def create_server(bridge: Bridge):
         return result
 
     @server.tool(annotations=read)
-    async def cascadeur_list_actions(query: str = "") -> dict:
-        """List curated menu actions for physics, AutoPosing, retargeting, cycles, playback and visual review, with verification status."""
-        return await call("list_actions", query=query)
+    async def cascadeur_list_actions(query: str = "", catalog: bool = False) -> dict:
+        """List curated menu actions (for cascadeur_run_action), or with catalog=true the full catalog of ~220 Cascadeur action IDs by category (for cascadeur_call_action). Filter with query."""
+        return await call("list_actions", query=query, catalog=catalog)
 
     @server.tool(annotations=edit)
     async def cascadeur_run_action(name: str, expected_scene: str) -> dict:

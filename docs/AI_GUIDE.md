@@ -21,8 +21,13 @@ Full details: `docs/FIELD_NOTES.md` in the server repository. The short version:
 - Writing on a non-key frame is overwritten by interpolation. Key first.
 - Leave fingers un-keyed unless every box is calibrated (right hand curls on +X, left on −X, thumb1 on +Z).
 - Knees/elbows: prefer `cascadeur_autopose` (anchors in, AutoPosing solves the rest) over computing them.
-- Foot contacts are track key/interval fixation (`csc.layers.layer.Fixation.Fulcrum`), not the point
-  channel `Fulcrum State`.
+- Contacts: `cascadeur_set_contacts` (fulcrum keys on the tracks of toe/heel points + point Fulcrum State
+  enforce/auto/never). Physics: `cascadeur_set_mode("physics")`, `cascadeur_physics_settings`,
+  `cascadeur_physics_priority_frames`, `cascadeur_physics_snap(answer="Yes")` (answers the modal
+  "apply only once" warning). AI in-betweens: `cascadeur_inbetween(first, last)`.
+- Any of ~220 Cascadeur actions: `cascadeur_list_actions(catalog=true)` → `cascadeur_call_action`.
+- Recommended shot pipeline: key poses → `cascadeur_autopose` → contacts/priority frames →
+  optional `cascadeur_inbetween` → physics settings → `cascadeur_physics_snap` → sample motion + renders.
 - Secondary Motion (UI) rewrites existing key values; on a keyed arm it made the wrist floppy.
 - `save_scene` to a new path renames the tab; pass the new name as `expected_scene`.
 - Viewport renders wait for a repaint; a minimized Cascadeur window never repaints. `capture_viewport`
