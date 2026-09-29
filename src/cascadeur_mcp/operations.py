@@ -20,6 +20,12 @@ def context():
     return csc, app, view, view.domain_scene()
 
 
+def optional_call(obj, name, default=None):
+    """Call an API method that older Cascadeur builds (e.g. 2025.2) may lack."""
+    method = getattr(obj, name, None)
+    return method() if callable(method) else default
+
+
 def file_path(value, state, *, exists=False, overwrite=False, suffix=None):
     raw = Path(value).expanduser()
     if not raw.is_absolute():
@@ -157,7 +163,7 @@ def state_summary(scene, view):
     boundary = view.animation_boundary()
     return dict(
         name=view.name(),
-        path=view.get_path_name(),
+        path=optional_call(view, "get_path_name"),
         frame=scene.get_current_frame(),
         first_frame=boundary.first_frame,
         last_frame=boundary.last_frame,
@@ -212,7 +218,10 @@ def dispatch(method, p, bridge_state):
         return {
             "scenes": [
                 dict(
-                    index=i, name=v.name(), path=v.get_path_name(), active=v == current
+                    index=i,
+                    name=v.name(),
+                    path=optional_call(v, "get_path_name"),
+                    active=v == current,
                 )
                 for i, v in enumerate(app.get_scene_manager().scenes())
             ]
@@ -244,8 +253,8 @@ def dispatch(method, p, bridge_state):
         return dict(
             api_version=getattr(csc, "__version__", "unknown"),
             tools=items,
-            export_available=app.is_export_available(),
-            pro_features_available=app.is_pro_features_available(),
+            export_available=optional_call(app, "is_export_available"),
+            pro_features_available=optional_call(app, "is_pro_features_available"),
             scripting_enabled=bridge_state["allow_scripts"],
             note="Available API members are discovered live. Presence does not prove successful execution or animation quality.",
         )
@@ -324,7 +333,9 @@ def dispatch(method, p, bridge_state):
         props = []
         for did in dv.get_all_data_id(oid):
             row = dict(
-                id=str(did), name=dv.get_data_name(did), mode=str(dv.get_data(did).mode)
+                id=str(did),
+                name=getattr(dv.get_data(did), "name", None),
+                mode=str(dv.get_data(did).mode),
             )
             try:
                 row["value"] = encode_data(read_data(dv, did, frame))
@@ -695,7 +706,10 @@ def dispatch(method, p, bridge_state):
             note="A render can finish asynchronously; verify the output file.",
         )
     if method in ("import_fbx", "export_fbx"):
-        if method == "export_fbx" and not app.is_export_available():
+        if (
+            method == "export_fbx"
+            and optional_call(app, "is_export_available", True) is False
+        ):
             raise PermissionError(
                 "Export is unavailable under the current Cascadeur license."
             )
