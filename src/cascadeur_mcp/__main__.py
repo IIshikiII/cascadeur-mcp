@@ -23,6 +23,12 @@ def main():
         help="Enable full-privilege Python execution; must also be enabled in app bridge.",
     )
     parser.add_argument(
+        "--pyside6-site",
+        type=Path,
+        help="Folder with a PySide6 build matching Cascadeur's Qt (see docs/FIELD_NOTES.md); "
+        "written into the generated bridge script to enable UI state reads.",
+    )
+    parser.add_argument(
         "--setup",
         type=Path,
         metavar="DIRECTORY",
@@ -38,7 +44,11 @@ def main():
         print(
             json.dumps(
                 generate(
-                    args.setup, args.bridge_dir, args.workspace, args.allow_scripts
+                    args.setup,
+                    args.bridge_dir,
+                    args.workspace,
+                    args.allow_scripts,
+                    args.pyside6_site,
                 ),
                 indent=2,
             )

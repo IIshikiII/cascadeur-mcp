@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 
-def generate(output, bridge_dir, workspace, allow_scripts=False):
+def generate(output, bridge_dir, workspace, allow_scripts=False, pyside6_site=None):
     output = Path(output).expanduser().resolve()
     bridge_dir = Path(bridge_dir).expanduser().resolve()
     workspace = Path(workspace).expanduser().resolve()
@@ -27,7 +27,13 @@ def generate(output, bridge_dir, workspace, allow_scripts=False):
         "        del sys.modules[_module_name]\n"
         f"sys.path.insert(0, {str(output / 'app')!r})\n"
         "from cascadeur_mcp import app_bridge\n"
-        f"app_bridge.start({str(bridge_dir)!r}, {str(workspace)!r}, allow_scripts={allow_scripts!r})\n"
+        f"app_bridge.start({str(bridge_dir)!r}, {str(workspace)!r}, allow_scripts={allow_scripts!r}"
+        + (
+            f", pyside6_site={str(Path(pyside6_site).expanduser().resolve())!r}"
+            if pyside6_site
+            else ""
+        )
+        + ")\n"
     )
     (output / "start_bridge.py").write_text(startup)
     executable = str(Path(sys.executable).absolute())

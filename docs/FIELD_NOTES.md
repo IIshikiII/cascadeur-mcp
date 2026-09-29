@@ -1,0 +1,220 @@
+# Cascadeur MCP — field notes
+
+Practical knowledge collected while animating real shots (hand wave, jump spinning kick) with this server
+on Windows, Cascadeur 2025.x (Qt 6.5.1, embedded Python 3.11). Everything marked **verified** was
+measured in the live app; **unverified** means observed once or inferred. Read this before animating.
+
+## 1. Session setup
+
+- Start the bridge inside Cascadeur after every launch: **Window → Python Console**, run
+  `exec(open(r"<...>\cascadeur-setup\start_bridge.py").read())`. Re-running is safe (it stops the old bridge).
+- `run_script` needs both switches: `allow_scripts=True` in `start_bridge.py` **and** `--allow-scripts`
+  in the server args. `cascadeur_status` shows `allow_scripts`.
+- Registering in PowerShell: the `claude.ps1` shim swallows a bare `--`, giving
+  `error: unknown option '-m'`. Quote it: `claude mcp add cascadeur -s user '--' "<python.exe>" -m cascadeur_mcp ...`.
+- Windows file-lock race: occasional `PermissionError` on `session\response-*.json` / `status.json`
+  ("bridge is not connected"). Retrying the call works (the operation itself is fine).
+- `save_scene` to a new path **renames the open tab** to that file name. `run_action(expected_scene=...)`
+  must use the current tab name (`cascadeur_get_state` → `name`).
+- A scene opened from disk has `path: null` in `get_state`; always save explicitly with an absolute path
+  inside the workspace.
+
+## 2. Driving the app from Python (bypassing MCP payload limits)
+
+For dense edits (hundreds of transforms) call the bridge directly from the server venv instead of
+pasting huge JSON into tool calls:
+
+```python
+import asyncio, sys
+sys.path.insert(0, r"<repo>\src")
+from cascadeur_mcp.bridge import Bridge
+b = Bridge(r"<work>\session", r"<work>\animations", timeout=300)
+asyncio.run(b.call("animate_transforms", dict(keyframes=[...], interpolation="BEZIER")))
+```
+
+Method names/params are the same as the MCP tools without the `cascadeur_` prefix. Wrap calls in a
+retry on `PermissionError` (see §1).
+
+Inside `run_script` you get `csc, app, view, scene`. Useful, verified entry points:
+
+| Need | Call |
+| --- | --- |
+| Undoable edit with selection access | `scene.modify_update_with_session(label, cb)`; `cb(model_editor, update, scene_updater, session)` |
+| Write animated value | `model_editor.data_editor().set_data_value(data_id, frame, value)` |
+| Transform data id | `bv.get_behaviour_data(bv.get_behaviour_by_name(obj, 'Transform'), 'global_position')` |
+| Object by name | `list(scene.model_viewer().get_objects('hand_MainPoint_r'))[0]` |
+| Select anything (incl. tool objects) | `session.take_selector().select(ids_set, first_id)` |
+| Read selection | `scene.selector().selected().ids` (may contain `csc.domain.Tool_object_id`) |
+| Position of a (tool) object | `pv = scene.selector().pivot(); pv.select(id); pv.position()` |
+| Any menu command | `app.get_action_manager().call_action('<Action ID>')` (IDs: https://cascadeur.com/help/category/301) |
+| Settings (not animated) | `dv.get_setting_value(bv.get_behaviour_setting(beh, 'fixed'))` |
+
+Offline API reference shipped with the app: `<Cascadeur>\resources\scripts\python\samples\api_document.py`.
+Shipped scripts in `resources\scripts\python\` are good examples (e.g. `commands\animation_scripts\invert_selection.py`).
+Online docs: https://cascadeur.com/help/introduction (AutoPosing page: `/help/tools/animation_tools/autoposing`).
+
+## 3. The Cascy rig (bundled `Cascy.casc`)
+
+- Y up, character faces **+Z**, its right side is **−X**, units ≈ cm, rest pelvis at y≈91, head top ≈175.
+- 12 tracks (layers): `Body, Head, Arm_R/L, Hand_R/L, Leg_R/L, Foot_R/L, Fingers_R/L`. Keying one object keys
+  the **whole track** at that frame.
+- **Animate Point controllers with global positions.** Box rotations on the body are derived from points;
+  writing `chest_Box`/`head_Box` rotation deltas gave inconsistent, non-local results. Only finger Boxes
+  respond predictably to rotation deltas.
+- Limb points: `arm_MainPoint` = shoulder, `forearm_MainPoint` = elbow, `hand_MainPoint` = wrist;
+  `thigh_MainPoint` = hip, `calf_MainPoint` = knee, `foot_MainPoint` = ankle, `toe_MainPoint` = ball.
+  `*_AdditionalPoint` of forearm/calf sit ~8/15 cm to the side of the elbow/knee (hinge-axis helpers).
+  Hand orientation = `hand_DirectionPoint` (along fingers) + `hand_AdditionalPoint`.
+- Fingers: local X curls. **Right hand +X curls, left hand −X curls** (mirrored axes, verified on index1).
+  Thumb1 folds on +Z both sides. Other segments were NOT calibrated — a guessed fist looked broken on
+  most frames. Leave fingers un-keyed (the rest pose is a natural relaxed hand) unless you calibrate every
+  box with closeup renders.
+
+## 4. Keys, interpolation and hidden pitfalls
+
+- **Writing a value on a non-key frame is overwritten by interpolation.** Create the key first
+  (`set_keys`/`animate_transforms` do that). Several "the edit did nothing" results were this.
+- **Stale data in old keys:** channels you never write keep whatever was stored when a key was created.
+  A leftover key from an early experiment produced a knee pop on one frame. Fix: remove that key on all
+  tracks and recreate it (untouched channels then take interpolated values).
+- Removing keys: frame 0 is protected by the server; list tracks first.
+- The rig solver drags "planted" feet by 0.1–0.4 cm when the pelvis moves. If you correct it by shifting
+  the body, make the correction **smooth in time**; per-key independent corrections caused whole-body pops.
+- Bezier on dense keys is smooth, but the result is effectively baked: Cascadeur tools can't improve it.
+  Prefer ~10–20 animator key poses and let interpolation/AutoPosing/AutoPhysics work (user preference).
+
+## 5. Hand-made IK: what went wrong (if you must compute poses yourself)
+
+- Knee/elbow pole straight "forward" makes knees collapse inward (valgus) in wide stances. Use the
+  **rest-pose bend direction**, yawed with the foot, opening slightly outward as the joint bends.
+- Orient air feet from the shin and knee direction (toes follow the kneecap). "Minimal rotation from
+  rest" accumulates twist and flips feet.
+- A kicking leg sweeping backward almost parallel to the pole flips the IK plane; lift the pole upward.
+- Better: don't hand-solve knees/elbows at all — use AutoPosing (§7) with anchors only.
+
+## 6. Contacts (fulcrums) and AutoPhysics
+
+- **Fulcrum = key/interval property of a track**, not the point channel `Fulcrum State` (setting that channel
+  did nothing). Verified way:
+  ```python
+  L = csc.layers.layer
+  def change(section):
+      section.key.common.fixation = L.Fixation.Fulcrum        # key is a contact
+      section.interval.common.fixation = L.Fixation.Fulcrum   # stays planted until next key (Free on take-off)
+  model_editor.layers_editor().change_section(frame, layer_id, change)
+  ```
+  Layer id by name: `[l for l in lv.all_layer_ids() if lv.header(l).name == 'Foot_L'][0]`.
+- `Timeline.Change to fulcrum key` via `run_action` did not change anything in our tests.
+- `csc.tools.AnimationPointsTypes(first, last, scene, csc.tools.StaticPointsTypes(scene, [CenterOfMass behaviour]))`
+  returned empty fulcrum sets even with fixation set — probably only filled during a physics solve (unverified).
+- AutoPhysics: `physics_preview_toggle` works (green physics ghost appears) but is a blind toggle; the state
+  is not readable. `physics_snap` via API produced no measurable change in our tests — let the user press
+  Snap. `AutoPhysicTool` editor only exposes `turn_off`.
+- **Secondary Motion** (UI, "can be applied only once") rewrites values in existing keys. On dense keys it
+  moved the whole wave amplitude into the wrist ("floppy sausage arm"). Apply it only to body tracks, not
+  to the keyed arm, or use sparse keys.
+
+## 7. AutoPosing from a script — verified recipe
+
+Semantics (docs + tests): in AutoPosing mode, **blue** controllers are active and define the pose,
+**green** ones are predicted by the network. `SwitchLock` (Shift+Z) toggles selected controllers
+blue↔green. `Update` regenerates green controllers from the blue ones. Anchors stay exact.
+
+1. On a **key frame**, write the rough pose into rig points with AutoPosing mode **off**.
+2. `call_action('AutoPosingTool.AutoPosing')` → mode on; controllers sync to the rig pose.
+3. Find controller ids (33 `Tool_object_id`s, different per scene/session, no user click needed):
+   ```python
+   # view mode must be AutoPosing (cascadeur_set_view_mode "AutoPosing")
+   app.get_action_manager().call_action('Application.Select all')        # yields 2 seed tool ids
+   seeds = {i for i in scene.selector().selected().ids if isinstance(i, csc.domain.Tool_object_id)}
+   ids = set().union(*csc.domain.get_all_visible_ids_by_proc(scene, seeds, frame))
+   ```
+   Map each to a rig point with `pivot.select(t); pivot.position()` (30 coincide with points exactly; the
+   remaining 3 are pelvis/chest/head direction controllers ~13–20 cm away).
+4. Select anchors (hands, feet, toes, toe directions, pelvis, chest, head + the 3 direction controllers)
+   through the session selector and call `AutoPosingTool.SwitchLock` → blue.
+5. `call_action('AutoPosingTool.Update')` → knees, elbows, shoulders, spine are re-solved.
+   Measured on the kick: anchors moved 0.0 cm, an inverted knee moved 37 cm into a natural position.
+
+Pitfalls: lock state is not readable from the API (visual only) and `SwitchLock` toggles, so start from
+all-green controllers; `AutoPosingTool.AutoUnlock` is not "unlock all"; the editor methods
+`activate()` (returns False) and `add()` are not needed; controller positions come from the rig only when
+the mode is switched on, and a lock remembers the position at lock time.
+**Update with no blue controllers regenerates the whole pose** (everything moved 40–58 cm) — never call it
+before anchors are locked. Right after switching the mode on, writes to green points still stick, so a
+"does a write snap back" probe is not a reliable mode/lock test.
+
+### `cascadeur_autopose` (server tool)
+
+`cascadeur_autopose(frames=[...], anchors=None, include_directions=True)` automates steps 2–5 per key frame
+and leaves the mode off. Safety: takes a snapshot of all points and restores the frame if any anchor
+drifts more than 3 cm; remembers frames whose anchors it locked in `<workspace>/.autopose_locks.json`
+(keyed by tab name) so reruns do not toggle them back to green. If the user locks/unlocks controllers
+by hand, edit or delete that file. With the PySide6 bridge (§9) it reads the real AutoPosing button
+state and switches the mode off first if needed.
+Result on the kick (13 key frames): anchors moved ≤1.06 cm, elbows up to 18 cm, knees 7–15 cm; the
+inverted knees on frames 36/39 became natural.
+
+After editing `src/cascadeur_mcp/operations.py`, copy it to the generated app package
+(`<setup>/app/cascadeur_mcp/`) — the running bridge hot-reloads `operations.py`/`actions.py` from there.
+`app_bridge.py` changes need the bridge restarted from the Cascadeur console.
+
+## 8. Viewport capture
+
+- **Renders are queued until the window repaints. A minimized Cascadeur window never repaints**, so
+  `capture_viewport` returns "has not produced the output yet" and the PNGs appear later, all at once,
+  when someone restores the window. `capture_viewport` now un-minimizes the window without focusing it
+  (`ShowWindow(SW_SHOWNOACTIVATE)`) and reports `restored_minimized_window`.
+- Use `View` mode for clean renders, `Controller` / `AutoPosing` to see controllers.
+- The user may move the camera in the UI at the same time — set the camera right before each capture.
+
+## 9. Qt / PySide6
+
+- Cascadeur ships Qt 6.5.1 (Core/Gui/Qml/Quick; UI is QML). Its Python has **no** PySide6/shiboken.
+- **Verified: PySide6 6.5.1.1 runs inside Cascadeur bound to Cascadeur's own Qt** (`Qt6Core.dll` resolved
+  from the Cascadeur folder, `QCoreApplication.applicationName() == "Cascadeur"`). No crash.
+- Preparation (Windows, once; versions must match `QtCore.qVersion()` of your Cascadeur build):
+  ```
+  uvx --python 3.11 pip download "PySide6-Essentials==6.5.1.1" "shiboken6==6.5.1.1" --no-deps --only-binary=:all: --platform win_amd64 -d wheels
+  # unzip both wheels into <dir>\site
+  # delete site\PySide6\Qt6*.dll, msvcp140*.dll, concrt140.dll, vcruntime140*.dll, opengl32sw.dll
+  # delete the same runtime DLLs from site\shiboken6
+  # copy python3.dll from any CPython 3.11 install into <dir>\site  (abi3 wheels need it; Cascadeur lacks it)
+  ```
+  Then pass `pyside6_site=r"<dir>\site"` to `app_bridge.start(...)` (or `--pyside6-site` to `--setup`).
+- What it gives: the whole QML UI. Toolbar buttons are `ToolbarButton_QMLTYPE_*` items with properties
+  `actionId`, `toolTip`, `active` (the toggle state!), `visible`, `enabled`. The main window is the
+  top-level window with `objectName() == "MainWindow"`; walk `contentItem().childItems()` (~23k items).
+  `active` on `AutoPosingTool.AutoPosing` / `AutoPhysicsTool.Switch Auto Physics` reliably reflects the
+  modes (verified by toggling). UI notification texts ("Auto posing.Auto unlock: done") are readable too.
+  Exposed as `cascadeur_ui_state`.
+- Not tried yet: synthesizing mouse input on the viewport, pressing QML buttons directly.
+- Settings panels are exposed as `view::ViewSettingsList` / `QSortFilterProxyModel` models (roles
+  `settingsName`, `settingsGroup`, ...) — a way to read tool settings (e.g. physics) later.
+  Some item models are custom C++ types without a PySide converter (`view::TreeToListModel*`); wrap
+  `item.property('model')` in try/except.
+
+### Upstream (gprethesh/cascadeur-mcp) vs this fork
+
+Upstream used PySide6 only for the bridge `QTimer`, and captured app messages with
+`events.event_message_manager`. The Windows 2025.2 build has neither, so commit `fd7235d` switched to a
+Win32 `SetTimer` and made several API calls optional. Status now:
+
+| Upstream feature | Windows 2025.2 | Restored |
+| --- | --- | --- |
+| Qt main-thread timer | no PySide6 | yes, when `pyside6_site` is set (`_QtTimer` is preferred; Win32 timer is the fallback) |
+| App error/info message capture (`events.event_message_manager`) | module absent in Cascadeur itself | no; `scene.get_event_log_or_null()` is an opaque `IMessageHandler` |
+| `View.get_path_name` (scene path) | method absent | yes for the active tab, parsed from the main window title |
+| `is_export_available`, `is_pro_features_available` | methods absent | no (reported as null) |
+| `DataViewer.get_data_name` | method absent | replaced by `get_data(id).name` |
+
+## 10. Log of experiments
+
+- Hand wave: dense procedural keys + smooth foot-drift correction; Secondary Motion made the arm floppy;
+  a stale early key caused a knee pop (fixed by recreating the key).
+- Jump spinning kick v1/v2: hand-made IK produced valgus knees and flipped feet; guessed finger fist broke
+  hands → v2 keeps fingers un-keyed, 16 key poses, fulcrum via layer fixation.
+- AutoPosing research: tool ids via user box-select → then fully programmatic (Select all + processor
+  expansion); lock semantics from docs; full recipe verified; `cascadeur_autopose` added.
+- Minimized window explained the "stuck" viewport captures.
+- PySide6 6.5.1.1 loaded into Cascadeur's Qt; toolbar `active` states readable; `cascadeur_ui_state` added.

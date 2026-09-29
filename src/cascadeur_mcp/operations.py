@@ -20,6 +20,12 @@ def context():
     return csc, app, view, view.domain_scene()
 
 
+def optional_call(obj, name, default=None):
+    """Call an API method that older Cascadeur builds (e.g. 2025.2) may lack."""
+    method = getattr(obj, name, None)
+    return method() if callable(method) else default
+
+
 def file_path(value, state, *, exists=False, overwrite=False, suffix=None):
     raw = Path(value).expanduser()
     if not raw.is_absolute():
@@ -148,6 +154,23 @@ def modify(scene, label, callback):
         )
 
 
+def scene_path(view, current=True):
+    """Scene file path. Builds without View.get_path_name (e.g. Windows 2025.2) fall back to
+    the main window title "<path> - Cascadeur", which only describes the active tab."""
+    path = optional_call(view, "get_path_name")
+    if path or not current:
+        return path or None
+    gui = qt_gui({})
+    if gui is None:
+        return None
+    for window in gui.QGuiApplication.topLevelWindows():
+        if window.objectName() == "MainWindow":
+            title = window.title().removesuffix(" - Cascadeur").lstrip("*")
+            if title.lower().endswith(".casc") and Path(title).is_file():
+                return str(Path(title))
+    return None
+
+
 def state_summary(scene, view):
     mv = scene.model_viewer()
     counts = {}
@@ -157,7 +180,7 @@ def state_summary(scene, view):
     boundary = view.animation_boundary()
     return dict(
         name=view.name(),
-        path=view.get_path_name(),
+        path=scene_path(view),
         frame=scene.get_current_frame(),
         first_frame=boundary.first_frame,
         last_frame=boundary.last_frame,
@@ -194,6 +217,276 @@ def inspect_api(root, path, limit=100):
     )
 
 
+def qt_gui(bridge_state):
+    """PySide6.QtGui bound to Cascadeur's own Qt, or None when unavailable.
+
+    Cascadeur ships no Qt bindings. A PySide6 build for the same Qt version with its Qt DLLs
+    removed (so Cascadeur's already-loaded ones are reused) can be pointed to with the bridge's
+    pyside6_site option. See docs/FIELD_NOTES.md.
+    """
+    import os
+    import sys
+
+    try:
+        from PySide6 import QtGui
+
+        return QtGui
+    except ImportError:
+        pass
+    site = bridge_state.get("pyside6_site")
+    if not site or not Path(site).is_dir():
+        return None
+    try:
+        os.add_dll_directory(site)
+        os.add_dll_directory(str(Path(sys.executable).parent))
+        if site not in sys.path:
+            sys.path.insert(0, site)
+        import PySide6
+        from PySide6 import QtCore, QtGui
+
+        # Bindings must target the Qt version Cascadeur has loaded (e.g. 6.5.1.1 on 6.5.1).
+        return QtGui if PySide6.__version__.startswith(QtCore.qVersion()) else None
+    except Exception:
+        return None
+
+
+def toolbar_states(bridge_state):
+    """{action id: active} for toolbar buttons of the main window, or None without PySide6."""
+    gui = qt_gui(bridge_state)
+    if gui is None:
+        return None
+    windows = [
+        w
+        for w in gui.QGuiApplication.topLevelWindows()
+        if w.objectName() == "MainWindow"
+    ]
+    if not windows:
+        return None
+    states = {}
+
+    def walk(item):
+        action = item.property("actionId")
+        if action and item.property("visible"):
+            states[action] = states.get(action, False) or bool(item.property("active"))
+        for child in item.childItems():
+            walk(child)
+
+    walk(windows[0].contentItem())
+    return states
+
+
+def restore_minimized_window():
+    """Un-minimize the Cascadeur window without focusing it (Windows only).
+
+    Viewport renders are queued until the window repaints; a minimized window never does,
+    so captures silently wait until the user restores it.
+    """
+    import os
+    import sys
+
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    pid, found = os.getpid(), []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def collect(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsIconic(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(collect, 0)
+    for hwnd in found:
+        user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+    return bool(found)
+
+
+AUTOPOSE_ANCHORS = (
+    "hand_MainPoint_r",
+    "hand_MainPoint_l",
+    "foot_MainPoint_r",
+    "foot_MainPoint_l",
+    "toe_MainPoint_r",
+    "toe_MainPoint_l",
+    "toe_DirectionPoint_r",
+    "toe_DirectionPoint_l",
+    "pelvis_MainPoint",
+    "chest_MainPoint",
+    "head_MainPoint",
+)
+
+
+def autopose(scene, view, app, p, bridge_state):
+    """Re-solve key poses with AutoPosing: anchors become active (blue), the rest is predicted.
+
+    Verified mechanics: controllers are Tool_object_ids found via Select all in the AutoPosing
+    viewport; switching the mode on syncs them to the rig pose; SwitchLock toggles selected
+    controllers blue/green; Update regenerates the green ones from the blue ones.
+    The API exposes neither the mode nor lock state, so the bridge assumes the mode is off
+    between calls and remembers locked frames in <workspace>/.autopose_locks.json. A frame whose
+    anchors drift after Update is restored from a snapshot and reported as failed.
+    """
+    import json
+
+    import csc
+    import numpy as np
+
+    mv, dv = scene.model_viewer(), scene.data_viewer()
+    lv = scene.layers_viewer()
+    am = app.get_action_manager()
+    dvp = view.active_viewport().domain_viewport()
+    VM = csc.view.ViewportMode
+    null = csc.model.ObjectId.null()
+    anchors = list(p.get("anchors") or AUTOPOSE_ANCHORS)
+    frames = [frame_number(f) for f in p["frames"]]
+    if not frames or len(frames) > 200:
+        raise ValueError("Provide 1 to 200 key frames.")
+    points = {
+        mv.get_object_name(o): transform_id(scene, o, "global_position")
+        for o in mv.get_objects()
+        if mv.get_object_type_name(o) == "Point"
+    }
+    unknown = [n for n in anchors if n not in points]
+    if unknown:
+        raise ValueError("Unknown anchor points: " + ", ".join(unknown))
+    for f in frames:
+        for name in anchors:
+            lid = lv.layer_id_by_obj_id_or_null(object_id(scene, name))
+            if not lid.is_null() and not lv.layer(lid).is_key(f):
+                raise ValueError(
+                    "Frame %d is not a key on the track of %s." % (f, name)
+                )
+    registry_path = bridge_state["workspace"] / ".autopose_locks.json"
+    try:
+        registry = json.loads(registry_path.read_text())
+    except (OSError, ValueError):
+        registry = {}
+    scene_key = view.name()
+    locked = set(registry.get(scene_key, []))
+
+    def read(name, f):
+        return np.array(dv.get_data_value(points[name], f), dtype=float).ravel()
+
+    def restore(snapshot, f):
+        def edit(me, ue, su, session):
+            for name, v in snapshot.items():
+                me.data_editor().set_data_value(points[name], f, v)
+            su.run_update(set(points.values()), f)
+
+        scene.modify_update_with_session("MCP autopose restore", edit)
+
+    def select(tool_ids):
+        tool_ids = set(tool_ids)
+        first = next(iter(tool_ids)) if tool_ids else null
+
+        def edit(model, update, sc, session):
+            session.take_selector().select(tool_ids, first)
+
+        scene.modify_with_session("MCP autopose select", edit)
+
+    def controllers(f):
+        dvp.set_mode_visualizers(VM.AutoPosing)
+        am.call_action("Application.Select all")
+        seeds = {
+            i
+            for i in scene.selector().selected().ids
+            if isinstance(i, csc.domain.Tool_object_id)
+        }
+        tools = set()
+        for group in csc.domain.get_all_visible_ids_by_proc(scene, seeds, f):
+            tools |= {i for i in group if isinstance(i, csc.domain.Tool_object_id)}
+        pivot = scene.selector().pivot()
+        pose = {n: read(n, f) for n in points}
+        by_name, directions = {}, []
+        for t in tools:
+            pivot.select(t)
+            pos = np.array(pivot.position(), dtype=float).ravel()
+            best = min(pose, key=lambda n: np.linalg.norm(pose[n] - pos))
+            if np.linalg.norm(pose[best] - pos) < 1.0:
+                by_name[best] = t
+            else:
+                directions.append(t)
+        return tools, by_name, directions
+
+    report = []
+    ui = toolbar_states(bridge_state)
+    mode_checked = ui is not None and "AutoPosingTool.AutoPosing" in ui
+    if mode_checked and ui["AutoPosingTool.AutoPosing"]:
+        am.call_action(
+            "AutoPosingTool.AutoPosing"
+        )  # the recipe needs the mode off first
+    try:
+        for f in frames:
+            scene.set_current_frame(f)
+            before = {n: read(n, f) for n in points}
+            am.call_action(
+                "AutoPosingTool.AutoPosing"
+            )  # on: controllers sync to the rig pose
+            status = "ok"
+            try:
+                tools, by_name, directions = controllers(f)
+                if not tools:
+                    raise RuntimeError("No AutoPosing controllers found for this rig.")
+                missing = [n for n in anchors if n not in by_name]
+                lock = set()
+                if f not in locked:
+                    lock = {by_name[n] for n in anchors if n in by_name}
+                    if p.get("include_directions", True):
+                        lock |= set(directions)
+                    select(lock)
+                    am.call_action("AutoPosingTool.SwitchLock")
+                am.call_action("AutoPosingTool.Update")
+                select(set())
+            finally:
+                am.call_action(
+                    "AutoPosingTool.AutoPosing"
+                )  # off: the solved pose stays in the rig
+            after = {n: read(n, f) for n in points}
+            moved = {n: float(np.linalg.norm(after[n] - before[n])) for n in points}
+            drift = max(moved[n] for n in anchors)
+            if lock:  # SwitchLock toggled them whatever happens next
+                locked.add(f)
+            if drift > float(p.get("max_anchor_drift", 3.0)):
+                restore(before, f)
+                status = (
+                    "restored: anchors drifted %.1f cm (lock state out of sync?)"
+                    % drift
+                )
+            report.append(
+                dict(
+                    frame=f,
+                    status=status,
+                    controllers=len(tools),
+                    newly_locked=len(lock),
+                    missing_anchors=missing,
+                    anchor_drift_cm=round(drift, 2),
+                    moved_cm={
+                        n: round(v, 1)
+                        for n, v in sorted(moved.items(), key=lambda x: -x[1])
+                        if v >= 0.5
+                    },
+                )
+            )
+    finally:
+        dvp.set_mode_visualizers(VM.View)
+        registry[scene_key] = sorted(locked)
+        registry_path.write_text(json.dumps(registry, indent=1))
+    ui = toolbar_states(bridge_state)
+    return dict(
+        frames=report,
+        mode_state_checked=mode_checked,
+        autoposing_mode_on_after=None
+        if ui is None
+        else ui.get("AutoPosingTool.AutoPosing"),
+        note="AutoPosing mode is left off; anchors stay active (blue) on processed frames. Render to verify.",
+    )
+
+
 def dispatch(method, p, bridge_state):
     import csc
 
@@ -212,7 +505,10 @@ def dispatch(method, p, bridge_state):
         return {
             "scenes": [
                 dict(
-                    index=i, name=v.name(), path=v.get_path_name(), active=v == current
+                    index=i,
+                    name=v.name(),
+                    path=scene_path(v, current=v == current),
+                    active=v == current,
                 )
                 for i, v in enumerate(app.get_scene_manager().scenes())
             ]
@@ -244,8 +540,8 @@ def dispatch(method, p, bridge_state):
         return dict(
             api_version=getattr(csc, "__version__", "unknown"),
             tools=items,
-            export_available=app.is_export_available(),
-            pro_features_available=app.is_pro_features_available(),
+            export_available=optional_call(app, "is_export_available"),
+            pro_features_available=optional_call(app, "is_pro_features_available"),
             scripting_enabled=bridge_state["allow_scripts"],
             note="Available API members are discovered live. Presence does not prove successful execution or animation quality.",
         )
@@ -324,7 +620,9 @@ def dispatch(method, p, bridge_state):
         props = []
         for did in dv.get_all_data_id(oid):
             row = dict(
-                id=str(did), name=dv.get_data_name(did), mode=str(dv.get_data(did).mode)
+                id=str(did),
+                name=getattr(dv.get_data(did), "name", None),
+                mode=str(dv.get_data(did).mode),
             )
             try:
                 row["value"] = encode_data(read_data(dv, did, frame))
@@ -687,15 +985,20 @@ def dispatch(method, p, bridge_state):
         rp.samples = 1
         if not 64 <= rp.width <= 3840 or not 64 <= rp.height <= 2160:
             raise ValueError("Render size out of bounds.")
+        restored = restore_minimized_window()
         tool = app.get_tools_manager().get_tool("RenderToFile")
         tool.take_image(view, rp, str(path))
         return dict(
             path=str(path),
             exists=path.is_file(),
+            restored_minimized_window=restored,
             note="A render can finish asynchronously; verify the output file.",
         )
     if method in ("import_fbx", "export_fbx"):
-        if method == "export_fbx" and not app.is_export_available():
+        if (
+            method == "export_fbx"
+            and optional_call(app, "is_export_available", True) is False
+        ):
             raise PermissionError(
                 "Export is unavailable under the current Cascadeur license."
             )
@@ -724,6 +1027,20 @@ def dispatch(method, p, bridge_state):
             raise ValueError("Unknown FBX mode.")
         getattr(loader, mapping[p.get("mode", "scene")])(str(path))
         return dict(path=str(path), exists=path.is_file())
+    if method == "autopose":
+        return autopose(scene, view, app, p, bridge_state)
+    if method == "ui_state":
+        states = toolbar_states(bridge_state)
+        if states is None:
+            return dict(
+                available=False,
+                note="Needs PySide6 matching Cascadeur's Qt; see docs/FIELD_NOTES.md (bridge pyside6_site).",
+            )
+        query = p.get("query", "").lower()
+        return dict(
+            available=True,
+            buttons={k: v for k, v in sorted(states.items()) if query in k.lower()},
+        )
     if method == "list_actions":
         from .actions import ACTIONS
 

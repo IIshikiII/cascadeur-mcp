@@ -45,21 +45,14 @@ def stop():
     global _timer, _state
     if _timer is not None:
         _timer.stop()
-        _timer.deleteLater()
         _timer = None
     if _state is not None:
         (_state["directory"] / "status.json").unlink(missing_ok=True)
         _state = None
 
 
-def start(bridge_dir, workspace, allow_scripts=False):
+def start(bridge_dir, workspace, allow_scripts=False, pyside6_site=None):
     global _timer, _state
-    from PySide6.QtCore import QCoreApplication, QThread, QTimer
-
-    if QThread.currentThread() != QCoreApplication.instance().thread():
-        raise RuntimeError(
-            "Start the bridge from Cascadeur Python Console on the main thread."
-        )
     directory = Path(bridge_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
@@ -79,16 +72,89 @@ def start(bridge_dir, workspace, allow_scripts=False):
         directory=directory,
         workspace=Path(workspace).expanduser().resolve(),
         allow_scripts=bool(allow_scripts),
+        pyside6_site=str(Path(pyside6_site).expanduser().resolve()) if pyside6_site else None,
         instance=uuid.uuid4().hex,
         last_status=0,
     )
     _state["workspace"].mkdir(parents=True, exist_ok=True)
-    _timer = QTimer(QCoreApplication.instance())
-    _timer.setInterval(50)
-    _timer.timeout.connect(_poll)
-    _timer.start()
+    if _state["pyside6_site"]:
+        _enable_pyside6(_state["pyside6_site"])
+    _timer = _start_timer(50, _poll)
     _poll()
     print("Cascadeur MCP bridge started: " + str(directory))
+
+
+def _enable_pyside6(site):
+    """Make a PySide6 build bound to Cascadeur's own Qt importable (see docs/FIELD_NOTES.md)."""
+    import sys
+
+    if os.name == "nt":
+        os.add_dll_directory(site)  # python3.dll for the abi3 bindings
+        os.add_dll_directory(str(Path(sys.executable).parent))  # Cascadeur's Qt DLLs
+    if site not in sys.path:
+        sys.path.insert(0, site)
+
+
+class _QtTimer:
+    def __init__(self, interval, callback):
+        from PySide6.QtCore import QCoreApplication, QThread, QTimer
+
+        if QThread.currentThread() != QCoreApplication.instance().thread():
+            raise RuntimeError(
+                "Start the bridge from Cascadeur Python Console on the main thread."
+            )
+        self._timer = QTimer(QCoreApplication.instance())
+        self._timer.setInterval(interval)
+        self._timer.timeout.connect(callback)
+        self._timer.start()
+
+    def stop(self):
+        self._timer.stop()
+        self._timer.deleteLater()
+
+
+class _Win32Timer:
+    """Thread timer dispatched by the app's own message loop (Qt pumps it)."""
+
+    def __init__(self, interval, callback):
+        import ctypes
+        from ctypes import wintypes
+
+        self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+        proc_type = ctypes.WINFUNCTYPE(
+            None, wintypes.HWND, wintypes.UINT, ctypes.c_size_t, wintypes.DWORD
+        )
+        self._user32.SetTimer.restype = ctypes.c_size_t
+        self._user32.SetTimer.argtypes = [
+            wintypes.HWND, ctypes.c_size_t, wintypes.UINT, proc_type
+        ]
+        self._user32.KillTimer.argtypes = [wintypes.HWND, ctypes.c_size_t]
+
+        def on_timer(hwnd, message, timer_id, tick):
+            try:
+                callback()
+            except Exception:
+                traceback.print_exc()
+
+        # Keep a reference: the callback must outlive the timer.
+        self._proc = proc_type(on_timer)
+        self._id = self._user32.SetTimer(None, 0, interval, self._proc)
+        if not self._id:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def stop(self):
+        if self._id:
+            self._user32.KillTimer(None, self._id)
+            self._id = 0
+
+
+def _start_timer(interval, callback):
+    try:
+        return _QtTimer(interval, callback)
+    except ImportError:
+        if os.name != "nt":
+            raise
+        return _Win32Timer(interval, callback)
 
 
 def _poll():
@@ -165,7 +231,12 @@ def _poll_once():
 
 def execute_with_messages(method, params):
     import csc
-    from events import event_message_manager
+
+    try:
+        from events import event_message_manager
+    except ImportError:
+        # Older builds (e.g. Windows releases) lack the message manager.
+        return dispatch(method, params), []
 
     messages = []
     levels = {int(v): k for k, v in csc.MessageLevel.__members__.items()}
@@ -199,6 +270,23 @@ def dispatch(method, params):
         )
         exec(compile(params["code"], "<cascadeur-mcp>", "exec"), ns, ns)
         return ns.get("result")
-    from cascadeur_mcp.operations import dispatch as execute
+    return _operations().dispatch(method, params, _state)
 
-    return execute(method, params, _state)
+
+_module_stamps = {}
+
+
+def _operations():
+    """Import operations, reloading them when their files change on disk."""
+    import importlib
+    import sys
+
+    for name in ("cascadeur_mcp.actions", "cascadeur_mcp.operations"):
+        module = sys.modules.get(name)
+        if module is None:
+            module = importlib.import_module(name)
+        stamp = os.stat(module.__file__).st_mtime_ns
+        if _module_stamps.setdefault(name, stamp) != stamp:
+            module = importlib.reload(module)
+            _module_stamps[name] = stamp
+    return module
