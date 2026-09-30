@@ -129,6 +129,37 @@ the full-frame check before/after and keep the pre-physics file to roll back.
 - One open scene, AutoPhysics assistant off while posing, AutoPosing in batches of ≤3 frames (long calls
   make the bridge heartbeat stale; wait for it instead of retrying).
 
+## Two or more characters in one scene
+
+Verified 2026-09-30 with UE5 Manny + UE5 Quinn (`cascadeur-work/animations/duo_test.casc`, script
+`duo_test.py`).
+- **Adding a character**: the samples live in `<Cascadeur>/samples/` (UE4_Mannequin, UE4_Mannequin_Female,
+  UE5_Manny, UE5_Quinn, UEFN_Mannequin). Open the first one, save it as a new scene in the workspace, then
+  File → Import → Scene to current (action `File.Import.Scene to current...`) and pick the second file.
+  The file dialog is native and does not block the call; the scene clipboard (`get_scene_clipboard`) and
+  `Copier.Copy/Paste` do NOT copy characters.
+- **Names**: the imported character gets a prefix, e.g. `character1:pelvis_Box`; every name-based tool
+  works with it. Track names repeat (two `Body`, two `Arm_L`...), so address tracks by id (`list_tracks`).
+- **AutoPosing is per character**: pass `character="character1:"` (anchors and release get the prefix).
+  The mode syncs only the controllers of the character that is selected when it turns on, and Select all
+  only reaches the first character's controllers. Another character needs its controller id once: ask
+  the user to turn AutoPosing mode on, click any controller of that character, then call
+  `cascadeur_autopose_seed` - it is cached in `<workspace>/.autopose_seeds.json` and stays valid for the
+  scene and its copies. Without it autopose refuses instead of posing the wrong character.
+- **Move/turn a character only through anchor points**, never by writing every point and Box (that stretched
+  the mesh between the characters). A 180° turn: rotate the anchors (pelvis, spine_04, feet, balls with
+  their direction points, thighs, upperarms, hands with direction/additional points) - a rotation keeps
+  sides (left stays left) - and run autopose with `include_directions=false`. Thighs and upperarms carry
+  the new facing of pelvis and chest; their unnamed direction controllers still point the old way.
+- **Head after a turn**: its direction controller stays locked backwards. `fix_head_facing` (default, when
+  the head is not an anchor) compares the face with the hips' forward, flips the head direction controller
+  if it looks backwards and reports `head_facing` (cosine, 1.0 = straight ahead). Check it in the report.
+- **Check the other character**: the autopose report lists moved points of both characters; the other
+  character must not move.
+- **Physics**: `physics_priority_frames` takes `character` (each character has its own Center of Mass).
+  Which character `physics_snap` affects in a multi-character scene is NOT verified yet (a snap with Quinn
+  selected changed neither character); test on a copy and measure both before relying on it.
+
 ## Body animation workflow (Cascadeur's own pipeline)
 
 Cascadeur's docs split animation into Reference → Drafting → Spline → Physics → Polishing

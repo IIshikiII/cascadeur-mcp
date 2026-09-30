@@ -665,10 +665,19 @@ def physics_snap(scene, app, bridge_state, p):
 
 
 def physics_priority_frames(scene, p):
-    """Set or clear AutoPhysics priority frames (animated `priority_frame` on the Center of Mass)."""
+    """Set or clear AutoPhysics priority frames (animated `priority_frame` on the Center of Mass).
+
+    Every character has its own Center of Mass; `character` (name prefix, "" = the unprefixed
+    one) limits the change to one of them, otherwise all are set."""
     bv, dv, mv = scene.behaviour_viewer(), scene.data_viewer(), scene.model_viewer()
+    character = p.get("character")
     targets = []
     for oid in mv.get_objects():
+        name = mv.get_object_name(oid)
+        if character is not None and (
+            not name.startswith(character) if character else ":" in name
+        ):
+            continue
         beh = bv.get_behaviour_by_name(oid, "AutoPhysics")
         if not beh.is_null():
             targets.append(
@@ -753,6 +762,35 @@ AUTOPOSE_ANCHORS = (
 )
 
 
+# Unnamed AutoPosing direction controllers, labelled by the point at their height.
+DIRECTION_LABELS = {
+    "pelvis": "pelvis_MainPoint",
+    "chest": "spine_04_MainPoint",
+    "head": "head_MainPoint",
+}
+SEED_CACHE = ".autopose_seeds.json"
+
+
+def load_seed_cache(bridge_state):
+    """{character prefix: [[tool id, ...], ...]} kept in the workspace."""
+    import json
+
+    try:
+        return json.loads((bridge_state["workspace"] / SEED_CACHE).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def save_seed(bridge_state, character, seeds):
+    import json
+
+    cache = load_seed_cache(bridge_state)
+    known = cache.setdefault(character, [])
+    if seeds not in known:
+        known.insert(0, seeds)
+    (bridge_state["workspace"] / SEED_CACHE).write_text(json.dumps(cache, indent=1), encoding="utf-8")
+
+
 def autopose(scene, view, app, p, bridge_state):
     """Re-solve key poses with AutoPosing: anchors are active (blue), the rest is predicted.
 
@@ -772,10 +810,31 @@ def autopose(scene, view, app, p, bridge_state):
     dvp = view.active_viewport().domain_viewport()
     VM = csc.view.ViewportMode
     null = csc.model.ObjectId.null()
-    anchors = list(p.get("anchors") or AUTOPOSE_ANCHORS)
-    release = [n for n in (p.get("release") or []) if n not in anchors]
+    # Multi-character scenes: imported characters get a namespace prefix ("character1:").
+    # Select all in AutoPosing mode only reaches the first character's controllers, so another
+    # character needs a seed: the id of any of its AutoPosing controllers (stable in the scene
+    # file and its copies; autopose_seed caches it). Controllers are matched only to that
+    # character's points.
+    character = p.get("character") or ""
+    seed_candidates = [list(p["tool_seeds"])] if p.get("tool_seeds") else []
+    seed_candidates += [s for s in load_seed_cache(bridge_state).get(character, []) if s not in seed_candidates]
+    seed_candidates.append(None)  # None = Select all (the first character)
+
+    def own(name):
+        return name.startswith(character) if character else ":" not in name
+
+    def pref(name):
+        return name if not character or name.startswith(character) else character + name
+
+    anchors = [pref(n) for n in (p.get("anchors") or AUTOPOSE_ANCHORS)]
+    release = [pref(n) for n in (p.get("release") or []) if pref(n) not in anchors]
     limit = float(p.get("max_anchor_drift", 3.0))
     include_directions = bool(p.get("include_directions", True))
+    # Unnamed direction controllers set the facing of pelvis, chest and head. A locked (blue)
+    # one keeps its old direction: after a character turns, the head looks backwards. Lock
+    # state is not readable (a green controller whose prediction is stable does not move in
+    # Update either), so the head is checked by meaning: it must face the way the hips face.
+    fix_head = bool(p.get("fix_head_facing", True)) and pref("head_MainPoint") not in anchors
     frames = [frame_number(f) for f in p["frames"]]
     if not frames or len(frames) > 200:
         raise ValueError("Provide 1 to 200 key frames.")
@@ -798,6 +857,19 @@ def autopose(scene, view, app, p, bridge_state):
     def read(name, f):
         return np.array(dv.get_data_value(points[name], f), dtype=float).ravel()
 
+    def head_facing(f):
+        """Cosine between the face direction and the hips' forward (None if the rig lacks them)."""
+        names = [pref(n) for n in ("thigh_MainPoint_l", "thigh_MainPoint_r", "head_MainPoint", "head_AdditionalPoint")]
+        if any(n not in points for n in names):
+            return None
+        tl, tr, h, ha = (read(n, f) for n in names)
+        fwd = np.cross(tl - tr, [0.0, 1.0, 0.0])
+        face = ha - h
+        fwd[1] = face[1] = 0.0
+        if np.linalg.norm(fwd) < 1e-6 or np.linalg.norm(face) < 1e-6:
+            return None
+        return round(float(np.dot(fwd, face) / np.linalg.norm(fwd) / np.linalg.norm(face)), 2)
+
     def restore(snapshot, f):
         def edit(me, ue, su, session):
             for name, v in snapshot.items():
@@ -815,20 +887,13 @@ def autopose(scene, view, app, p, bridge_state):
 
         scene.modify_with_session("MCP autopose select", edit)
 
-    def controllers(f):
-        dvp.set_mode_visualizers(VM.AutoPosing)
-        am.call_action("Application.Select all")
-        seeds = {
-            i
-            for i in scene.selector().selected().ids
-            if isinstance(i, csc.domain.Tool_object_id)
-        }
+    def group(seeds, f):
         tools = set()
-        for group in csc.domain.get_all_visible_ids_by_proc(scene, seeds, f):
-            tools |= {i for i in group if isinstance(i, csc.domain.Tool_object_id)}
+        for g in csc.domain.get_all_visible_ids_by_proc(scene, seeds, f):
+            tools |= {i for i in g if isinstance(i, csc.domain.Tool_object_id)}
         pivot = scene.selector().pivot()
-        pose = {n: read(n, f) for n in points}
-        by_name, directions = {}, []
+        pose = {n: read(n, f) for n in points if own(n)}
+        by_name, loose = {}, {}
         for t in tools:
             pivot.select(t)
             pos = np.array(pivot.position(), dtype=float).ravel()
@@ -836,8 +901,36 @@ def autopose(scene, view, app, p, bridge_state):
             if np.linalg.norm(pose[best] - pos) < 1.0:
                 by_name[best] = t
             else:
-                directions.append(t)
+                loose[t] = pos
+        # label direction controllers by the body part they sit next to
+        directions = {}
+        for t, pos in sorted(loose.items(), key=lambda kv: kv[1][1]):
+            label = min(
+                DIRECTION_LABELS,
+                key=lambda k: abs(pose[pref(DIRECTION_LABELS[k])][1] - pos[1]),
+            )
+            directions[label if label not in directions else "%s%d" % (label, len(directions))] = t
         return tools, by_name, directions
+
+    def controllers(f):
+        dvp.set_mode_visualizers(VM.AutoPosing)
+        for candidate in seed_candidates:
+            if candidate is None:
+                am.call_action("Application.Select all")
+                seeds = {
+                    i
+                    for i in scene.selector().selected().ids
+                    if isinstance(i, csc.domain.Tool_object_id)
+                }
+            else:
+                seeds = {csc.domain.Tool_object_id(s) for s in candidate}
+            tools, by_name, directions = group(seeds, f)
+            if tools and len(by_name) >= len(tools) // 2:
+                return tools, by_name, directions
+        raise RuntimeError(
+            "No AutoPosing controllers of %r found. In AutoPosing mode click one of its "
+            "controllers, then call autopose_seed (once per scene)." % (character or "the unprefixed rig")
+        )
 
     def tool_positions(tool_ids):
         pivot = scene.selector().pivot()
@@ -850,31 +943,35 @@ def autopose(scene, view, app, p, bridge_state):
     def attempt(f, toggle_names, toggle_directions, update=True):
         """Mode on -> SwitchLock the named controllers -> Update -> mode off.
 
-        toggle_directions: True = every direction controller, or a set of their indices (sorted
-        by position) to toggle. Returns the indices of direction controllers that moved in Update
-        (those are green: predicted by the network)."""
+        toggle_directions: True = every direction controller, or a set of their labels
+        (pelvis/chest/head) to toggle. Returns the labels of direction controllers that moved in
+        Update (those are green: predicted by the network)."""
+        # The mode syncs the controllers of the character that is selected when it turns on
+        # (another character's controllers stay at the origin).
+        root = object_id(scene, pref("pelvis_MainPoint"))
+        scene.modify_with_session(
+            "MCP autopose character", lambda m, u, sc, s: s.take_selector().select({root}, root)
+        )
         am.call_action("AutoPosingTool.AutoPosing")  # on: controllers sync to the rig
         try:
             tools, by_name, directions = controllers(f)
-            if not tools:
-                raise RuntimeError("No AutoPosing controllers found for this rig.")
-            directions = sorted(directions, key=lambda t: tuple(np.round(tool_positions([t])[t], 1)))
             toggle = {by_name[n] for n in toggle_names if n in by_name}
             if toggle_directions is True:
-                toggle |= set(directions)
+                toggle |= set(directions.values())
             elif toggle_directions:
-                toggle |= {directions[i] for i in toggle_directions if i < len(directions)}
+                toggle |= {directions[k] for k in toggle_directions if k in directions}
             if toggle:
                 select(toggle)
                 am.call_action("AutoPosingTool.SwitchLock")
-            before_dirs = tool_positions(directions)
+            before_dirs = tool_positions(directions.values())
             if update:
                 am.call_action("AutoPosingTool.Update")
-            after_dirs = tool_positions(directions)
+            after_dirs = tool_positions(directions.values())
             moved_dirs = {
-                i for i, t in enumerate(directions)
+                k for k, t in directions.items()
                 if np.linalg.norm(after_dirs[t] - before_dirs[t]) > 0.5
             }
+            state["directions"] = set(directions)
             select(set())
             return len(tools), [n for n in anchors if n not in by_name], len(toggle), moved_dirs
         finally:
@@ -882,6 +979,7 @@ def autopose(scene, view, app, p, bridge_state):
                 "AutoPosingTool.AutoPosing"
             )  # off: the pose stays in the rig
 
+    state = {"directions": set()}
     report = []
     ui = toolbar_states(bridge_state)
     mode_checked = ui is not None and "AutoPosingTool.AutoPosing" in ui
@@ -905,27 +1003,45 @@ def autopose(scene, view, app, p, bridge_state):
             blue_released = [n for n in release if moved[n] < 0.01]
             # Orientation of pelvis/chest/head/hands/feet lives on direction controllers; left
             # green, the network may turn a body part 180 degrees about its own axis.
-            lock_dirs = green_dirs if include_directions else set()
+            # The head is left to the head check below, so its direction is never locked here.
+            lock_dirs = {k for k in green_dirs if not (fix_head and k.startswith("head"))}
+            lock_dirs = lock_dirs if include_directions else set()
             status, toggled = "ok (anchors already active)", 0
             if green or blue_released or lock_dirs:
                 restore(before, f)
                 mostly_green = len(green) > len(anchors) // 2
-                count, missing, toggled, _ = attempt(
-                    f, green + blue_released, True if mostly_green and not include_directions else lock_dirs
+                dir_toggle = (
+                    {k for k in state["directions"] if not (fix_head and k.startswith("head"))}
+                    if mostly_green and not include_directions
+                    else lock_dirs
                 )
+                count, missing, toggled, _ = attempt(f, green + blue_released, dir_toggle)
                 if max(np.linalg.norm(read(n, f) - before[n]) for n in anchors) > limit:
                     restore(before, f)
-                    attempt(
-                        f, green + blue_released,
-                        True if mostly_green and not include_directions else lock_dirs, update=False
-                    )  # undo the lock toggle
+                    attempt(f, green + blue_released, dir_toggle, update=False)  # undo the toggle
                     status = "restored: anchors still drift after locking"
                 else:
-                    status = "ok (toggled %d controllers incl. %d directions, released %s)" % (
-                        toggled,
-                        len(lock_dirs),
+                    # A released point that still did not move was green already (its
+                    # prediction is stable); the toggle locked it, so toggle it back.
+                    stuck = [n for n in blue_released if np.linalg.norm(read(n, f) - before[n]) < 0.01]
+                    if stuck:
+                        attempt(f, stuck, set(), update=False)
+                    blue_released = [n for n in blue_released if n not in stuck]
+                    status = "ok (toggled %d controllers; locked directions %s, released %s)" % (
+                        toggled - len(stuck),
+                        sorted(lock_dirs),
                         blue_released,
                     )
+            head_label = next((k for k in state["directions"] if k.startswith("head")), None)
+            head_before = head_facing(f)
+            head_fixed = None
+            if fix_head and head_label and head_before is not None and head_before < 0 \
+                    and not status.startswith("restored"):
+                attempt(f, [], {head_label})  # toggle the head facing, Update
+                head_fixed = head_facing(f)
+                if head_fixed < head_before:
+                    attempt(f, [], {head_label})  # worse: toggle back
+                    head_fixed = head_facing(f)
             after = {n: read(n, f) for n in points}
             moved = {n: float(np.linalg.norm(after[n] - before[n])) for n in points}
             report.append(
@@ -935,6 +1051,7 @@ def autopose(scene, view, app, p, bridge_state):
                     controllers=count,
                     missing_anchors=missing,
                     anchor_drift_cm=round(max(moved[n] for n in anchors), 2),
+                    head_facing=head_before if head_fixed is None else "%s -> %s (head direction toggled)" % (head_before, head_fixed),
                     moved_cm={
                         n: round(v, 1)
                         for n, v in sorted(moved.items(), key=lambda x: -x[1])
@@ -953,6 +1070,49 @@ def autopose(scene, view, app, p, bridge_state):
         else ui.get("AutoPosingTool.AutoPosing"),
         note="AutoPosing mode is left off; anchors stay active (blue) on processed frames. Render to verify.",
     )
+
+
+def autopose_seed(scene, bridge_state):
+    """Ids of the selected AutoPosing controllers and the character (name prefix) they drive.
+
+    The user selects any controller of a character in AutoPosing mode; the id stays valid for
+    the scene (and copies of it) and is cached in the workspace, so autopose finds that
+    character's controllers from then on."""
+    import csc
+    import numpy as np
+
+    mv, dv = scene.model_viewer(), scene.data_viewer()
+    f = scene.get_current_frame()
+    seeds = [i for i in scene.selector().selected().ids if isinstance(i, csc.domain.Tool_object_id)]
+    if not seeds:
+        raise ValueError("Select an AutoPosing controller of the character in AutoPosing mode first.")
+    tools = set()
+    for group in csc.domain.get_all_visible_ids_by_proc(scene, set(seeds), f):
+        tools |= {i for i in group if isinstance(i, csc.domain.Tool_object_id)}
+    points = {
+        mv.get_object_name(o): np.array(dv.get_data_value(transform_id(scene, o, "global_position"), f), float).ravel()
+        for o in mv.get_objects()
+        if mv.get_object_type_name(o) == "Point"
+    }
+    pivot = scene.selector().pivot()
+    owners = {}
+    for t in tools:
+        pivot.select(t)
+        pos = np.array(pivot.position(), dtype=float).ravel()
+        best = min(points, key=lambda n: np.linalg.norm(points[n] - pos))
+        if np.linalg.norm(points[best] - pos) < 1.0:
+            prefix = best.rsplit(":", 1)[0] + ":" if ":" in best else ""
+            owners[prefix] = owners.get(prefix, 0) + 1
+    scene.selector().select(set(seeds), seeds[0])  # pivot.select changed the selection
+    character = max(owners, key=owners.get) if owners else None
+    if character is None or owners[character] < len(tools) // 2:
+        raise RuntimeError(
+            "The selected controllers are not synced to a character (%s); turn AutoPosing mode "
+            "on with that character selected and click one of its controllers." % owners
+        )
+    ids = [s.to_string() for s in seeds]
+    save_seed(bridge_state, character, ids)
+    return dict(tool_seeds=ids, controllers=len(tools), character=character, matches=owners, cached=True)
 
 
 def dispatch(method, p, bridge_state):
@@ -1497,6 +1657,8 @@ def dispatch(method, p, bridge_state):
         return dict(path=str(path), exists=path.is_file())
     if method == "autopose":
         return autopose(scene, view, app, p, bridge_state)
+    if method == "autopose_seed":
+        return autopose_seed(scene, bridge_state)
     if method == "call_action":
         from .actions import CATALOG, MODES
 

@@ -291,15 +291,26 @@ def create_server(bridge: Bridge):
         anchors: Annotated[list[str], Field(max_length=40)] | None = None,
         include_directions: bool = True,
         release: Annotated[list[str], Field(max_length=40)] | None = None,
+        character: str | None = None,
+        tool_seeds: Annotated[list[str], Field(max_length=4)] | None = None,
+        fix_head_facing: bool = True,
     ) -> dict:
-        """Re-solve existing key poses with Cascadeur AutoPosing. Anchor points (default: hands, feet, toes, pelvis, chest, head) are locked as active controllers; knees, elbows, shoulders and spine are predicted by the network. Frames must already be keys. Returns per-frame displacements; render to verify."""
+        """Re-solve existing key poses with Cascadeur AutoPosing. Anchor points (default: hands, feet, toes, pelvis, chest, head) are locked as active controllers; knees, elbows, shoulders and spine are predicted by the network. Frames must already be keys. Returns per-frame displacements; render to verify. Multi-character scenes: `character` is the name prefix (e.g. "character1:"; anchors are prefixed automatically); a character other than the first needs its controller id once: the user clicks one of its controllers in AutoPosing mode, then cascadeur_autopose_seed caches it. When the head is not an anchor, `fix_head_facing` checks that the face points the way the hips do (report: head_facing cosine) and flips the head direction controller if it looks backwards, e.g. after a character turns."""
         return await call(
             "autopose",
             frames=frames,
             anchors=anchors,
             include_directions=include_directions,
             release=release,
+            character=character,
+            tool_seeds=tool_seeds,
+            fix_head_facing=fix_head_facing,
         )
+
+    @server.tool(annotations=read)
+    async def cascadeur_autopose_seed() -> dict:
+        """Read the AutoPosing controller the user selected (AutoPosing mode) and report which character it drives. Pass tool_seeds and character to cascadeur_autopose. Ids stay valid for the scene."""
+        return await call("autopose_seed")
 
     @server.tool(annotations=edit)
     async def cascadeur_call_action(
@@ -358,10 +369,10 @@ def create_server(bridge: Bridge):
 
     @server.tool(annotations=edit)
     async def cascadeur_physics_priority_frames(
-        frames: Frames, on: bool = True
+        frames: Frames, on: bool = True, character: str | None = None
     ) -> dict:
-        """Mark key frames whose pose AutoPhysics must preserve (priority frames) or clear them. Few priority frames only; too many make the solve inaccurate."""
-        return await call("physics_priority_frames", frames=frames, on=on)
+        """Mark key frames whose pose AutoPhysics must preserve (priority frames) or clear them. Few priority frames only; too many make the solve inaccurate. Multi-character scenes: `character` is the name prefix ("" = the unprefixed character); omitted = every character."""
+        return await call("physics_priority_frames", frames=frames, on=on, character=character)
 
     @server.tool(annotations=edit)
     async def cascadeur_inbetween(
