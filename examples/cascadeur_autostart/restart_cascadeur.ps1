@@ -3,13 +3,15 @@
 # on the command line fires scene_opened (the startup scene does not fire scene_created).
 param(
     [int]$TimeoutSec = 60,
-    [string]$Scene = "C:\Users\IshikiI\Desktop\Coding\Cascadeur\VibeAnimating\cascadeur-work\animations\duo_lock.casc"
+    [string]$Scene = "C:\Users\IshikiI\Desktop\Coding\Cascadeur\VibeAnimating\cascadeur-work\animations\punch.casc"
 )
 $exe = "C:\Users\IshikiI\Software\Cascadeur\cascadeur.exe"
 $status = "C:\Users\IshikiI\Desktop\Coding\Cascadeur\VibeAnimating\cascadeur-work\session\status.json"
 
 Get-Process cascadeur -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
+# the killed bridge leaves a fresh heartbeat; a new bridge would refuse the directory for 10 s
+Remove-Item $status -ErrorAction SilentlyContinue
 $started = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 Start-Process -FilePath $exe -ArgumentList "`"$Scene`"" -WorkingDirectory (Split-Path $exe)
 

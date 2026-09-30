@@ -1075,7 +1075,10 @@ def autopose(scene, view, app, p, bridge_state):
                 }
             else:
                 seeds = {csc.domain.Tool_object_id(s) for s in candidate}
-            tools, by_name, directions = group(seeds, f)
+            try:
+                tools, by_name, directions = group(seeds, f)
+            except Exception:
+                continue  # a cached seed from another scene
             if tools and len(by_name) >= len(tools) // 2:
                 return tools, by_name, directions
         raise RuntimeError(
@@ -1268,6 +1271,182 @@ def autopose(scene, view, app, p, bridge_state):
     )
 
 
+# --- Body intersections from the rig's collision capsules ---------------------------------
+# Every Rigid Body with a CapsuleCollision behaviour is a capsule: centre = the body's global
+# position (+ capsule position), axis = local Z of (body rotation * capsule rotation), cylinder
+# length `length`, radius `radius`. Hands have no capsule: a fist capsule runs from
+# hand_MainPoint along hand_DirectionPoint.
+_ADJACENT = {
+    frozenset(pair) for pair in [
+        ("pelvis", "spine_02"), ("spine_02", "spine_04"), ("spine_04", "neck_01"), ("neck_01", "head"),
+        ("spine_04", "clavicle_l"), ("spine_04", "clavicle_r"), ("clavicle_l", "clavicle_r"),
+        ("clavicle_l", "neck_01"), ("clavicle_r", "neck_01"), ("clavicle_l", "upperarm_l"),
+        ("clavicle_r", "upperarm_r"), ("spine_04", "upperarm_l"), ("spine_04", "upperarm_r"),
+        ("upperarm_l", "lowerarm_l"), ("upperarm_r", "lowerarm_r"), ("lowerarm_l", "hand_l"),
+        ("lowerarm_r", "hand_r"), ("pelvis", "thigh_l"), ("pelvis", "thigh_r"), ("thigh_l", "thigh_r"),
+        ("thigh_l", "calf_l"), ("thigh_r", "calf_r"), ("calf_l", "foot_l"), ("calf_r", "foot_r"),
+        ("spine_02", "thigh_l"), ("spine_02", "thigh_r"), ("pelvis", "spine_04"),
+    ]
+}
+
+
+def _quat_matrix(value):
+    import numpy as np
+
+    q = value.to_quaternion()
+    w, x, y, z = q.w(), q.x(), q.y(), q.z()
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+    ])
+
+
+def _segment_distance(p1, q1, p2, q2):
+    """Closest distance between segments p1-q1 and p2-q2, with the closest points."""
+    import numpy as np
+
+    d1, d2, r = q1 - p1, q2 - p2, p1 - p2
+    a, e, f = float(d1 @ d1), float(d2 @ d2), float(d2 @ r)
+    if a < 1e-9 and e < 1e-9:
+        return float(np.linalg.norm(r)), p1, p2
+    if a < 1e-9:
+        s, t = 0.0, min(max(f / e, 0.0), 1.0)
+    else:
+        c = float(d1 @ r)
+        if e < 1e-9:
+            t, s = 0.0, min(max(-c / a, 0.0), 1.0)
+        else:
+            b = float(d1 @ d2)
+            den = a * e - b * b
+            s = min(max((b * f - c * e) / den, 0.0), 1.0) if den > 1e-9 else 0.0
+            t = (b * s + f) / e
+            if t < 0.0:
+                t, s = 0.0, min(max(-c / a, 0.0), 1.0)
+            elif t > 1.0:
+                t, s = 1.0, min(max((b - c) / a, 0.0), 1.0)
+    c1, c2 = p1 + d1 * s, p2 + d2 * t
+    return float(np.linalg.norm(c1 - c2)), c1, c2
+
+
+def body_capsules(scene, frame):
+    import numpy as np
+
+    mv, bv, dv = scene.model_viewer(), scene.behaviour_viewer(), scene.data_viewer()
+    caps = []
+    for oid in mv.get_objects():
+        beh = bv.get_behaviour_by_name(oid, "CapsuleCollision")
+        if beh.is_null():
+            continue
+        name = mv.get_object_name(oid)
+        prefix = name.rsplit(":", 1)[0] + ":" if ":" in name else ""
+        part = name[len(prefix):].replace("_Rigid", "")
+        if not read_data(dv, bv.get_behaviour_data(beh, "is_active"), frame):
+            continue
+        rot = _quat_matrix(dv.get_data_value(transform_id(scene, oid, "global_rotation"), frame))
+        rot = rot @ _quat_matrix(read_data(dv, bv.get_behaviour_data(beh, "rotation"), frame))
+        centre = np.array(dv.get_data_value(transform_id(scene, oid, "global_position"), frame), float).ravel()
+        centre = centre + np.array(read_data(dv, bv.get_behaviour_data(beh, "position"), frame), float).ravel()
+        half = rot[:, 2] * float(read_data(dv, bv.get_behaviour_data(beh, "length"), frame)) / 2
+        caps.append(dict(character=prefix, part=part, a=centre - half, b=centre + half,
+                         radius=float(read_data(dv, bv.get_behaviour_data(beh, "radius"), frame))))
+    points = {mv.get_object_name(o): o for o in mv.get_objects() if mv.get_object_type_name(o) == "Point"}
+    for prefix in sorted({c["character"] for c in caps}):
+        for side in "lr":
+            main, direc = prefix + "hand_MainPoint_" + side, prefix + "hand_DirectionPoint_" + side
+            if main in points and direc in points:
+                h = np.array(dv.get_data_value(transform_id(scene, points[main], "global_position"), frame), float).ravel()
+                d = np.array(dv.get_data_value(transform_id(scene, points[direc], "global_position"), frame), float).ravel()
+                tip = h + 9.0 * (d - h) / max(float(np.linalg.norm(d - h)), 1e-6)
+                caps.append(dict(character=prefix, part="hand_" + side, a=h, b=tip, radius=4.5))
+    return caps
+
+
+def check_collisions(scene, p):
+    """Penetrations between body capsules: between characters and within one character
+    (skeleton neighbours excluded). Depth in cm, worst first."""
+    frames = [frame_number(f) for f in p["frames"]]
+    tolerance = float(p.get("tolerance_cm", 0.5))
+    report = []
+    for frame in frames:
+        caps = body_capsules(scene, frame)
+        hits = []
+        for i in range(len(caps)):
+            for j in range(i + 1, len(caps)):
+                c1, c2 = caps[i], caps[j]
+                same = c1["character"] == c2["character"]
+                if same and frozenset((c1["part"], c2["part"])) in _ADJACENT:
+                    continue
+                dist, x1, x2 = _segment_distance(c1["a"], c1["b"], c2["a"], c2["b"])
+                depth = c1["radius"] + c2["radius"] - dist
+                if depth > tolerance:
+                    hits.append(dict(
+                        a=c1["character"] + c1["part"], b=c2["character"] + c2["part"],
+                        depth_cm=round(depth, 1), self=same,
+                        at=[round(float(v), 1) for v in (x1 + x2) / 2],
+                    ))
+        hits.sort(key=lambda h: -h["depth_cm"])
+        report.append(dict(frame=frame, capsules=len(caps), hits=hits[:40]))
+    return dict(frames=report, note="Capsules approximate the mesh (Cascadeur's collision bodies); "
+                "an intended contact (a punch landing) is a small between-character hit.")
+
+
+# --- Hand presets: finger Box local rotations ---------------------------------------------
+# Built-in presets live next to this file (hand_presets.json: "open" = a freshly opened sample,
+# "fist"); presets saved by the user go to <workspace>/.hand_presets.json and override them.
+# On the UE rigs the left and right finger local frames match, so one preset fits both hands.
+FINGER_BOXES = tuple(
+    "%s_%02d" % (f, j) for f in ("thumb", "index", "middle", "ring", "pinky") for j in (1, 2, 3)
+)
+
+
+def hand_presets(bridge_state):
+    import json
+
+    presets = json.loads((Path(__file__).with_name("hand_presets.json")).read_text(encoding="utf-8"))
+    try:
+        presets.update(json.loads((bridge_state["workspace"] / ".hand_presets.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError):
+        pass
+    return {k: v for k, v in presets.items() if not k.startswith("_")}
+
+
+def hand_pose(p, bridge_state):
+    presets = hand_presets(bridge_state)
+    name = p["preset"]
+    if name not in presets:
+        raise ValueError("Unknown hand preset %r; known: %s" % (name, sorted(presets)))
+    prefix = p.get("character") or ""
+    sides = "lr" if p.get("hand", "both") == "both" else p["hand"]
+    transforms = [
+        dict(object="%s%s_Box_%s" % (prefix, box, side), space="local", rotation_quaternion_wxyz=q)
+        for side in sides for box, q in presets[name].items()
+    ]
+    frames = [frame_number(f) for f in (p.get("frames") or [p.get("frame", 0)])]
+    return dispatch("animate_transforms", dict(
+        keyframes=[dict(frame=f, transforms=transforms) for f in frames],
+        interpolation=p.get("interpolation", "STEP")), bridge_state)
+
+
+def save_hand_preset(p, bridge_state):
+    import json
+
+    prefix = p.get("character") or ""
+    side = p.get("hand", "l")
+    frame = frame_number(p.get("frame", 0))
+    rows = dispatch("get_pose", dict(objects=["%s%s_Box_%s" % (prefix, b, side) for b in FINGER_BOXES],
+                                     frame=frame), bridge_state)["objects"]
+    preset = {b: [round(float(x), 6) for x in r["local_rotation"]["quaternion_wxyz"]] for b, r in zip(FINGER_BOXES, rows)}
+    path = bridge_state["workspace"] / ".hand_presets.json"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    saved[p["name"]] = preset
+    path.write_text(json.dumps(saved, indent=1), encoding="utf-8")
+    return dict(saved=p["name"], file=str(path), presets=sorted(hand_presets(bridge_state)))
+
+
 # --- AutoPosing lock state through Object properties --------------------------------------
 # The Locked flag of an AutoPosing controller (Object properties -> Input point -> Locked) is
 # the only reliable lock state; the Python API cannot reach the tool model. The panel follows
@@ -1356,8 +1535,11 @@ def ap_tools(scene, view, app, p, bridge_state):
         else:
             seeds = {csc.domain.Tool_object_id(x) for x in candidate}
         tools = set()
-        for g in csc.domain.get_all_visible_ids_by_proc(scene, seeds, frame):
-            tools |= {i for i in g if isinstance(i, csc.domain.Tool_object_id)}
+        try:
+            for g in csc.domain.get_all_visible_ids_by_proc(scene, seeds, frame):
+                tools |= {i for i in g if isinstance(i, csc.domain.Tool_object_id)}
+        except Exception:
+            continue  # a cached seed from another scene: "processor for object ... not found"
         rows = []
         for t in tools:
             pivot.select(t)
@@ -2032,6 +2214,14 @@ def dispatch(method, p, bridge_state):
         return autopose(scene, view, app, p, bridge_state)
     if method == "autopose_seed":
         return autopose_seed(scene, bridge_state)
+    if method == "hand_pose":
+        return hand_pose(p, bridge_state)
+    if method == "save_hand_preset":
+        return save_hand_preset(p, bridge_state)
+    if method == "list_hand_presets":
+        return dict(presets=sorted(hand_presets(bridge_state)))
+    if method == "check_collisions":
+        return check_collisions(scene, p)
     if method == "ap_tools":
         return ap_tools(scene, view, app, p, bridge_state)
     if method == "ap_select_tool":

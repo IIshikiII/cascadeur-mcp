@@ -89,9 +89,15 @@ class Bridge:
                     deadline = time.monotonic() + self.timeout
                     while time.monotonic() < deadline:
                         if response.exists():
-                            if response.stat().st_size > 32 * 1024 * 1024:
-                                raise BridgeError("Response exceeds 32 MiB.")
-                            result = json.loads(response.read_text())
+                            try:
+                                if response.stat().st_size > 32 * 1024 * 1024:
+                                    raise BridgeError("Response exceeds 32 MiB.")
+                                result = json.loads(response.read_text())
+                            except (PermissionError, json.JSONDecodeError):
+                                # Windows: the app still holds the file (atomic replace in
+                                # progress, antivirus scan); read it again shortly.
+                                await asyncio.sleep(0.05)
+                                continue
                             if (
                                 result.get("id") != rid
                                 or result.get("instance") != state["instance"]
@@ -113,8 +119,13 @@ class Bridge:
                     )
                 finally:
                     # Deleting an unclaimed request prevents late execution after cancellation.
-                    request.unlink(missing_ok=True)
-                    response.unlink(missing_ok=True)
+                    for leftover in (request, response):
+                        for _ in range(20):
+                            try:
+                                leftover.unlink(missing_ok=True)
+                                break
+                            except PermissionError:
+                                await asyncio.sleep(0.05)
             finally:
                 lock.release()
 

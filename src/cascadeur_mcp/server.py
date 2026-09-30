@@ -304,6 +304,28 @@ def create_server(bridge: Bridge):
             await call("set_mode", mode="autoposing", on=False)
             raise
 
+    @server.tool(annotations=edit)
+    async def cascadeur_hand_pose(
+        preset: str,
+        hand: Literal["l", "r", "both"] = "both",
+        character: str | None = None,
+        frames: Frames | None = None,
+    ) -> dict:
+        """Set the fingers of a hand from a preset (finger Box local rotations): "open" = the rest hand of a freshly opened sample, "fist" = a clenched fist; user presets saved with cascadeur_save_hand_preset too. Swap palm <-> fist in one call. Default frame 0; `character` is the name prefix in multi-character scenes."""
+        return await call("hand_pose", preset=preset, hand=hand, character=character, frames=frames or [0])
+
+    @server.tool(annotations=edit)
+    async def cascadeur_save_hand_preset(
+        name: str, hand: Literal["l", "r"] = "l", character: str | None = None, frame: Frame = 0
+    ) -> dict:
+        """Save the current finger pose of one hand as a named preset (workspace .hand_presets.json) for cascadeur_hand_pose. Left and right finger local frames match on UE rigs, so a preset fits both hands."""
+        return await call("save_hand_preset", name=name, hand=hand, character=character, frame=frame)
+
+    @server.tool(annotations=read)
+    async def cascadeur_check_collisions(frames: Frames, tolerance_cm: float = 0.5) -> dict:
+        """Body intersections on frames from the rig's collision capsules (Rigid Bodies with CapsuleCollision; hands added as fist capsules): penetration depth in cm between characters and within one character (skeleton neighbours excluded), worst first, with the contact point. Run it after every pose; an intended contact (a punch landing) is a small between-character hit, deep hits (a limb inside a head or torso) must be fixed."""
+        return await call("check_collisions", frames=frames, tolerance_cm=tolerance_cm)
+
     @server.tool(annotations=read)
     async def cascadeur_autopose_seed() -> dict:
         """Read the AutoPosing controller the user selected (AutoPosing mode) and report which character it drives. Pass tool_seeds and character to cascadeur_autopose. Ids stay valid for the scene."""

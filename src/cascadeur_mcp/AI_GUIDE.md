@@ -188,6 +188,52 @@ Verified 2026-09-30 with UE5 Manny + UE5 Quinn (`cascadeur-work/animations/duo_t
     character 0.02 cm / 0.2°, the snapped one moved up to 13.7 cm. Without `character` all are snapped.
   - `physics_priority_frames` takes `character` (each character has its own Center of Mass).
 
+## Working style the user asked for (read before posing)
+
+- **Stop at "acceptable".** In the punch scene there were acceptable variants that more tweaking made
+  worse, then effort went into repairing the damage. Save a checkpoint of every acceptable state, show
+  it, and change only what the user or a check names. Fewer, bigger moves; no micromanagement.
+- Do not re-derive what works; spend the effort on the one thing that is visibly wrong.
+
+## Impact pose (one key frame of a hit) - punch scene, 2026-09-30
+
+Scene `cascadeur-work/animations/punch.casc` (two UE5 Manny: attacker unprefixed, defender
+`character1:`), script `punch_pose.py`. What made the force read:
+- **Attacker**: long stance, rear heel high and turned in, hips ~30 deg / chest ~65 deg into the punch,
+  forward lean ~24 deg, eyes on the target (gaze anchor: `head_dir` + `direction_controller_head`),
+  guard hand off the face, both hands in `fist` preset. Anchors: hands and feet (positions only) +
+  gaze. The fist should touch the face, not sink into it (the user pulled it back out).
+- **Defender (user's fix)**: move the whole defender a bit *toward* the attacker, lock the neck base
+  controller (`neck_01`) and push it *back* - the body rocks back while the head stays at the fist;
+  hands slightly out. Hands released to AutoPosing looked better than placed wrists. A head-only or
+  chest-only anchor did not produce a recoil (the rig pulls a lone point back; a locked chest moved
+  ~13 cm in Update).
+- Check with `cascadeur_check_collisions` after each solve: it caught the guard hand 8.5 cm inside
+  the attacker's own head.
+
+## Hands: presets and checks
+
+- `cascadeur_hand_pose(preset, hand, character, frames)` sets all 15 finger Boxes from a preset:
+  `open` (the rest hand of a freshly opened sample) or `fist` (made by the user; the thumb is the hard
+  part - do not hand-roll thumbs). `cascadeur_save_hand_preset(name, hand, ...)` stores the current
+  fingers of a hand (workspace `.hand_presets.json`). UE rigs: left and right finger *local*
+  rotations are identical, so a preset fits both hands without mirroring.
+- Releasing the hand and foot *direction* points (anchor only `hand_l/r`, `toe_l/r`) usually gives
+  more natural wrists and ankles; keep a direction anchored only when its orientation is the point of
+  the shot (e.g. the punching fist).
+- `cascadeur_check_collisions(frames)`: body capsules from the rig (Rigid Bodies with
+  CapsuleCollision, axis = local Z of body x capsule rotation) plus fist capsules; reports penetration
+  depth between characters and within a character. The capsules are rougher than the mesh.
+
+## Cascadeur's main window disappearing - found and fixed
+
+The main window was destroyed while the bridge was writing JSON, i.e. inside Python's cyclic
+garbage collector: freeing a PySide wrapper that Python owns deletes its C++ object. The bridge now
+starts `diag.protect()`: `gc.DEBUG_SAVEALL` (the collector parks cycles instead of freeing them) and a
+60 s `diag.sweep()` that keeps live Python-owned Qt objects forever and releases the rest.
+`diag.install()` (autostart) also logs main-window destroyed/closing/visibility events with the
+Python stack to `session/window_events.log` and enables faulthandler.
+
 ## Body animation workflow (Cascadeur's own pipeline)
 
 Cascadeur's docs split animation into Reference → Drafting → Spline → Physics → Polishing

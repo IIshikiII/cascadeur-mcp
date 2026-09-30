@@ -81,6 +81,12 @@ def start(bridge_dir, workspace, allow_scripts=False, pyside6_site=None):
         _enable_pyside6(_state["pyside6_site"])
     _timer = _start_timer(50, _poll)
     _poll()
+    try:  # keep Python's cyclic GC from destroying Qt objects (it destroyed the main window)
+        from . import diag
+
+        diag.protect()
+    except Exception as exc:
+        print("cascadeur-mcp: GC protection unavailable: %r" % (exc,))
     print("Cascadeur MCP bridge started: " + str(directory))
 
 
