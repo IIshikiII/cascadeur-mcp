@@ -117,6 +117,10 @@ rotations, so average **through the rig hierarchy** (reference implementation:
 ### Stage 4 — polish, then physics (each → gate)
 Head/fingers via AutoPosing, contacts on toes/heels, AutoPhysics assistant compared with the character
 *before* snapping; priority frames on the story poses; snap only when the assistant is already close.
+Verified on the backflip: toes [0,22]+[42,72], heels [0,18]+[44,72], priority frames 0, 22, 32, 72. With only
+0/32/72 the solver straightened the approved takeoff arms (74°→29°); with the takeoff added it kept every
+pose (bends within 4°), only moved the body in flight so the COM follows one arc. Compare bends and
+the full-frame check before/after and keep the pre-physics file to roll back.
 
 ### Process rules the user insisted on
 - Report what you are doing in a few words during long operations; never claim a check you did not run.
