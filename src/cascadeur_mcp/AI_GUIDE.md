@@ -188,6 +188,18 @@ Verified 2026-09-30 with UE5 Manny + UE5 Quinn (`cascadeur-work/animations/duo_t
     character 0.02 cm / 0.2°, the snapped one moved up to 13.7 cm. Without `character` all are snapped.
   - `physics_priority_frames` takes `character` (each character has its own Center of Mass).
 
+## Scene setup tools (two characters, samples, checkpoints)
+
+- New scene from a bundled character: `cascadeur_list_samples` -> `cascadeur_open_sample(name,
+  save_as)`. Second character: `cascadeur_import_scene("UE5_Quinn")` -> prefix `character1:`.
+  Separate them with `cascadeur_place_character(offset, character)`, face them with
+  `cascadeur_turn_character(yaw_degrees, character)` (hands/feet + autopose). A non-first character
+  needs one user click in AutoPosing mode + `cascadeur_autopose_seed` before autopose works for it.
+- `cascadeur_checkpoint(name)` before a risky edit, `cascadeur_restore_checkpoint(name)` to go back
+  (Scene.Undo can roll back more than the last edit). `cascadeur_close_scene(save_as | discard)`
+  never shows the modal "save?" dialog.
+- Gaps found and closed are listed in `docs/MCP_GAPS.md`.
+
 ## Working style the user asked for (read before posing)
 
 - **Stop at "acceptable".** In the punch scene there were acceptable variants that more tweaking made

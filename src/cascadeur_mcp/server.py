@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from pathlib import Path
@@ -173,9 +174,9 @@ def create_server(bridge: Bridge):
         return await call("get_object", object=object, frame=frame)
 
     @server.tool(annotations=read)
-    async def cascadeur_get_pose(objects: Names, frame: Frame = 0) -> dict:
-        """Read local/global transforms at a frame. Rotations include WXYZ quaternions and Euler radians."""
-        return await call("get_pose", objects=objects, frame=frame)
+    async def cascadeur_get_pose(objects: Names, frame: Frame = 0, compact: bool = True) -> dict:
+        """Read local/global transforms at a frame. Rotations include WXYZ quaternions and Euler radians. compact=true drops the transforms an object does not have (Points have no rotation)."""
+        return await call("get_pose", objects=objects, frame=frame, compact=compact)
 
     @server.tool(annotations=edit)
     async def cascadeur_select_objects(objects: list[str]) -> dict:
@@ -303,6 +304,77 @@ def create_server(bridge: Bridge):
         except ToolError:
             await call("set_mode", mode="autoposing", on=False)
             raise
+
+    @server.tool(annotations=read)
+    async def cascadeur_list_samples() -> dict:
+        """Bundled character scenes in <Cascadeur>/samples (UE4_Mannequin, UE5_Manny, UE5_Quinn, ...)."""
+        return await call("list_samples")
+
+    @server.tool(annotations=edit)
+    async def cascadeur_open_sample(name: str, save_as: str, overwrite: bool = False) -> dict:
+        """Open a bundled character (see cascadeur_list_samples) and save it as a new workspace scene (absolute .casc path); the sample itself is never modified."""
+        return await call("open_sample", name=name, save_as=save_as, overwrite=overwrite)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_close_scene(
+        save_as: str | None = None, discard: bool = False, overwrite: bool = False
+    ) -> dict:
+        """Close the active scene tab without Cascadeur's modal "save?" dialog (it has crashed the app): save it to `save_as` first, or pass discard=true to keep a copy in <workspace>/.trash."""
+        return await call("close_scene", save_as=save_as, discard=discard, overwrite=overwrite)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_import_scene(path: str, timeout_s: int = 40) -> dict:
+        """Add another character to the current scene: File > Import > Scene to current with a sample name (e.g. "UE5_Quinn") or a workspace .casc path. The imported character gets a name prefix ("character1:"). Waits until the objects arrive. For AutoPosing of a non-first character the user must click one of its controllers once (cascadeur_autopose_seed)."""
+        before = await call("character_prefixes")
+        started = await call("import_scene", path=path)
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        while asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(1.0)
+            state = await call("get_state")
+            if state.get("object_count", 0) > started["objects_before"]:
+                after = await call("character_prefixes")
+                new = [c for c in after["characters"] if c not in before["characters"]]
+                return dict(imported=started["source"], objects=state["object_count"],
+                            characters=after["characters"], new_character=new[0] if new else None,
+                            note="Place it with cascadeur_place_character / cascadeur_turn_character.")
+        raise ToolError("The import did not finish in %d s; check Cascadeur for an open dialog." % timeout_s)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_place_character(
+        offset: Vector, character: str | None = None, frames: Frames | None = None
+    ) -> dict:
+        """Translate a whole character (all its Point and Box controllers) by `offset` cm on frames (default 0): placement, e.g. to separate two imported characters that stand in the same spot. Use cascadeur_turn_character to turn one."""
+        return await call("place_character", offset=list(offset), character=character, frames=frames or [0])
+
+    @server.tool(annotations=edit)
+    async def cascadeur_turn_character(
+        yaw_degrees: float,
+        character: str | None = None,
+        frame: Frame = 0,
+        offset: Vector | None = None,
+        solve: bool = True,
+    ) -> dict:
+        """Turn a character about its pelvis by rotating only its hand and foot targets (plus an optional offset), then (solve=true) re-pose it with cascadeur_autopose: the network turns the body and head. +90 turns a +Z-facing character toward +X. Frame must be a key."""
+        turned = await call("turn_character", yaw_degrees=yaw_degrees, character=character, frame=frame,
+                            offset=list(offset) if offset else None)
+        if not solve:
+            return turned
+        from .autopose_flow import autopose_explicit
+
+        async def step(method, **params):
+            return await call(method, **params)
+
+        return dict(turned=turned, autopose=await autopose_explicit(step, [frame], None, character or ""))
+
+    @server.tool(annotations=edit)
+    async def cascadeur_checkpoint(name: str) -> dict:
+        """Save a named snapshot of the active scene (<workspace>/.checkpoints/) and keep working in the same file. Use before risky edits; cascadeur_restore_checkpoint is the reliable undo (Scene.Undo can roll back more than the last edit)."""
+        return await call("checkpoint", name=name)
+
+    @server.tool(annotations=edit)
+    async def cascadeur_restore_checkpoint(name: str) -> dict:
+        """Replace the active scene with a named checkpoint (the current state is kept in <workspace>/.trash) and keep the original file name."""
+        return await call("restore_checkpoint", name=name)
 
     @server.tool(annotations=edit)
     async def cascadeur_hand_pose(

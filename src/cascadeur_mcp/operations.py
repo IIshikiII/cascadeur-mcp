@@ -1447,6 +1447,221 @@ def save_hand_preset(p, bridge_state):
     return dict(saved=p["name"], file=str(path), presets=sorted(hand_presets(bridge_state)))
 
 
+# --- Scene management the MCP was missing (docs/MCP_GAPS.md 1-4, 9) -----------------------
+def _workspace_path(bridge_state, *parts):
+    path = bridge_state["workspace"].joinpath(*parts)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _stamp():
+    import datetime
+
+    return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def samples_dir():
+    import sys
+
+    return Path(sys.executable).parent / "samples"
+
+
+def list_samples():
+    folder = samples_dir()
+    return dict(folder=str(folder), samples=sorted(f.stem for f in folder.glob("*.casc")))
+
+
+def close_scene(app, view, p, bridge_state):
+    """Close the active tab without the modal "save?" dialog (it has crashed Cascadeur): the scene
+    is saved first - to `save_as`, or with discard=true to <workspace>/.trash/."""
+    name = view.name()
+    if p.get("save_as"):
+        target = file_path(p["save_as"], bridge_state, overwrite=p.get("overwrite", False), suffix={".casc"})
+    elif p.get("discard"):
+        target = _workspace_path(bridge_state, ".trash", "%s-%s.casc" % (Path(name).stem, _stamp()))
+    else:
+        raise ValueError("Pass save_as (a workspace .casc path) or discard=true.")
+    view.save(str(target))
+    app.get_data_source_manager().close_scene(view)
+    return dict(closed=name, saved_to=str(target),
+                scenes=[v.name() for v in app.get_scene_manager().scenes()])
+
+
+def open_sample(app, p, bridge_state):
+    """Open a bundled character scene (<Cascadeur>/samples/<name>.casc, read-only) and save it as
+    a workspace scene, so later saves never touch the sample."""
+    source = samples_dir() / (p["name"] + ("" if p["name"].endswith(".casc") else ".casc"))
+    if not source.is_file():
+        raise ValueError("Unknown sample %r; see list_samples." % p["name"])
+    target = file_path(p["save_as"], bridge_state, overwrite=p.get("overwrite", False), suffix={".casc"})
+    if not app.get_data_source_manager().load_scene(str(source)):
+        raise RuntimeError("Cascadeur could not open the sample.")
+    view = app.get_scene_manager().current_scene()
+    view.save(str(target))
+    return dict(opened=source.name, saved_as=str(target), scene=view.name())
+
+
+def import_scene(app, p, bridge_state):
+    """Merge another .casc (a sample name or a workspace file) into the current scene via
+    File > Import > Scene to current. Its native file dialog is filled by a Win32 timer, so the
+    import finishes after this call returns: poll the object count (the server tool does)."""
+    import ctypes
+    import builtins
+    import os
+    from ctypes import wintypes
+
+    from PySide6 import QtCore
+
+    value = p["path"]
+    sample = samples_dir() / (value + ("" if value.endswith(".casc") else ".casc"))
+    if sample.is_file() and not Path(value).is_absolute():
+        source = sample
+    else:
+        source = file_path(value, bridge_state, exists=True, suffix={".casc"})
+    if os.name != "nt":
+        raise RuntimeError("import_scene fills the Windows file dialog; not available here.")
+    user32 = ctypes.windll.user32
+    pid = os.getpid()
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def cls(h):
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(h, buf, 256)
+        return buf.value
+
+    def windows(parent=None):
+        out = []
+
+        def cb(h, _):
+            if parent is not None:
+                out.append(h)
+                return True
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(h, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(h) and cls(h) == "#32770":
+                out.append(h)
+            return True
+
+        callback = enum_proc(cb)
+        if parent is None:
+            user32.EnumWindows(callback, 0)
+        else:
+            user32.EnumChildWindows(parent, callback, 0)
+        return out
+
+    state = {"left": 30, "done": False}
+
+    def tick():
+        for dialog in windows():
+            edits = [c for c in windows(dialog) if cls(c) == "Edit" and user32.IsWindowVisible(c)]
+            if edits:
+                user32.SendMessageW(edits[0], 0x000C, 0, ctypes.c_wchar_p(str(source)))  # WM_SETTEXT
+                user32.PostMessageW(dialog, 0x0111, 1, 0)  # WM_COMMAND IDOK
+                state["done"] = True
+                return
+        state["left"] -= 1
+        if state["left"] > 0:
+            QtCore.QTimer.singleShot(500, tick)
+
+    builtins._cascadeur_mcp_import_tick = tick  # keep the callable alive
+    QtCore.QTimer.singleShot(800, tick)
+    before = len(list(app.get_scene_manager().current_scene().domain_scene().model_viewer().get_objects()))
+    app.get_action_manager().call_action("File.Import.Scene to current...")
+    return dict(dispatched=True, source=str(source), objects_before=before)
+
+
+def _character_controls(scene, character):
+    mv = scene.model_viewer()
+    own = (lambda n: n.startswith(character)) if character else (lambda n: ":" not in n)
+    return [
+        mv.get_object_name(o) for o in mv.get_objects()
+        if mv.get_object_type_name(o) in ("Point", "Box") and own(mv.get_object_name(o))
+    ]
+
+
+def place_character(scene, p, bridge_state):
+    """Translate a whole character (all its Point and Box controllers) on frames: a placement,
+    not a pose. Turning is turn_character (hands and feet) + autopose."""
+    import numpy as np
+
+    names = _character_controls(scene, p.get("character") or "")
+    offset = np.array(p["offset"], float)
+    frames = [frame_number(f) for f in (p.get("frames") or [0])]
+    keyframes = []
+    for f in frames:
+        rows = dispatch("get_pose", dict(objects=names, frame=f), bridge_state)["objects"]
+        keyframes.append(dict(frame=f, transforms=[
+            dict(object=r["name"], space="global", position=[float(x) for x in np.array(r["global_position"]) + offset])
+            for r in rows
+        ]))
+    result = dispatch("animate_transforms", dict(keyframes=keyframes, interpolation=p.get("interpolation", "STEP")),
+                      bridge_state)
+    return dict(moved=len(names), frames=frames, updated=result.get("updated_values"))
+
+
+HAND_FOOT_POINTS = tuple(
+    "%s_%s" % (n, s) for s in "lr" for n in (
+        "hand_MainPoint", "hand_DirectionPoint", "hand_AdditionalPoint",
+        "foot_MainPoint", "ball_MainPoint", "ball_DirectionPoint", "ball_AdditionalPoint",
+    )
+)
+
+
+def turn_character(scene, p, bridge_state):
+    """Rotate a character's hand and foot targets about its pelvis (vertical axis) on a frame.
+    Only the hands and feet are written; run autopose afterwards (hands + feet anchored) and the
+    network turns the body and head. A rotation keeps sides: left stays left."""
+    import numpy as np
+
+    prefix = p.get("character") or ""
+    frame = frame_number(p.get("frame", 0))
+    a = np.radians(float(p["yaw_degrees"]))
+    rot = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+    names = [prefix + n for n in HAND_FOOT_POINTS]
+    rows = dispatch("get_pose", dict(objects=names + [prefix + "pelvis_MainPoint"], frame=frame), bridge_state)["objects"]
+    pos = {r["name"]: np.array(r["global_position"], float) for r in rows}
+    centre = pos.pop(prefix + "pelvis_MainPoint") * np.array([1, 0, 1])
+    offset = np.array(p.get("offset") or [0, 0, 0], float)
+    transforms = [
+        dict(object=n, space="global", position=[float(x) for x in centre + rot @ (v - centre) + offset])
+        for n, v in pos.items()
+    ]
+    dispatch("animate_transforms", dict(keyframes=[dict(frame=frame, transforms=transforms)], interpolation="STEP"),
+             bridge_state)
+    return dict(frame=frame, written=len(transforms), note="Now run autopose on this frame (hands and feet anchored).")
+
+
+def checkpoint(view, p, bridge_state):
+    """Save a named copy of the active scene (<workspace>/.checkpoints/) and keep working in the
+    original file. restore_checkpoint brings it back - a reliable replacement for Undo."""
+    original = scene_path(view)
+    name = "%s__%s.casc" % (Path(view.name()).stem.split("__")[0], p["name"])
+    target = _workspace_path(bridge_state, ".checkpoints", name)
+    view.save(str(target))
+    if original:
+        view.save(str(original))
+    return dict(checkpoint=str(target), working_file=original)
+
+
+def restore_checkpoint(app, view, p, bridge_state):
+    original = scene_path(view)
+    name = "%s__%s.casc" % (Path(view.name()).stem.split("__")[0], p["name"])
+    source = bridge_state["workspace"] / ".checkpoints" / name
+    if not source.is_file():
+        known = sorted(f.stem for f in (bridge_state["workspace"] / ".checkpoints").glob("*.casc"))
+        raise ValueError("No checkpoint %r; known: %s" % (name, known))
+    trash = _workspace_path(bridge_state, ".trash", "%s-%s.casc" % (Path(view.name()).stem, _stamp()))
+    view.save(str(trash))
+    manager = app.get_data_source_manager()
+    manager.close_scene(view)
+    if not manager.load_scene(str(source)):
+        raise RuntimeError("Cascadeur could not open the checkpoint.")
+    restored = app.get_scene_manager().current_scene()
+    if original:
+        restored.save(str(original))
+    return dict(restored=str(source), working_file=original, previous_state_saved_to=str(trash))
+
+
 # --- AutoPosing lock state through Object properties --------------------------------------
 # The Locked flag of an AutoPosing controller (Object properties -> Input point -> Locked) is
 # the only reliable lock state; the Python API cannot reach the tool model. The panel follows
@@ -1845,6 +2060,8 @@ def dispatch(method, p, bridge_state):
                     )
                 except Exception as exc:
                     row[prop] = {"unavailable": str(exc)}
+            if p.get("compact"):
+                row = {k: v for k, v in row.items() if not (isinstance(v, dict) and "unavailable" in v)}
             rows.append(row)
         return dict(frame=frame, objects=rows)
     if method == "set_frame":
@@ -2214,6 +2431,24 @@ def dispatch(method, p, bridge_state):
         return autopose(scene, view, app, p, bridge_state)
     if method == "autopose_seed":
         return autopose_seed(scene, bridge_state)
+    if method == "list_samples":
+        return list_samples()
+    if method == "close_scene":
+        return close_scene(app, view, p, bridge_state)
+    if method == "open_sample":
+        return open_sample(app, p, bridge_state)
+    if method == "import_scene":
+        return import_scene(app, p, bridge_state)
+    if method == "place_character":
+        return place_character(scene, p, bridge_state)
+    if method == "turn_character":
+        return turn_character(scene, p, bridge_state)
+    if method == "checkpoint":
+        return checkpoint(view, p, bridge_state)
+    if method == "restore_checkpoint":
+        return restore_checkpoint(app, view, p, bridge_state)
+    if method == "character_prefixes":
+        return dict(characters=character_prefixes(scene))
     if method == "hand_pose":
         return hand_pose(p, bridge_state)
     if method == "save_hand_preset":
