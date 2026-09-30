@@ -637,30 +637,131 @@ def set_contacts(scene, p):
     )
 
 
-def physics_snap(scene, app, bridge_state, p):
-    """Snap the animation to the AutoPhysics result and report how much it moved.
+def character_prefixes(scene):
+    """Name prefixes of the characters in the scene ("" = the unprefixed one), by Center of Mass."""
+    mv, bv = scene.model_viewer(), scene.behaviour_viewer()
+    out = []
+    for oid in mv.get_objects():
+        if not bv.get_behaviour_by_name(oid, "AutoPhysics").is_null():
+            name = mv.get_object_name(oid)
+            out.append(name.rsplit(":", 1)[0] + ":" if ":" in name else "")
+    return sorted(set(out))
 
-    Snap is dispatched asynchronously; when Secondary/Compensation/Separation motion or
-    smoothing are enabled Cascadeur opens a modal "apply only once" warning. `answer` ("Yes"
-    disables those features after snapping, "No" keeps them) is pressed automatically.
-    The measurement is returned by a follow-up call: `cascadeur_sample_motion`.
+
+def snapshot_characters(scene, prefixes, frames):
+    """Per-frame controller transforms (Point positions, Box positions and rotations) of the
+    given characters. Everything else (joints, mesh, centre of mass) is derived from them."""
+    mv, dv = scene.model_viewer(), scene.data_viewer()
+    snap = {}
+    for oid in mv.get_objects():
+        name = mv.get_object_name(oid)
+        owner = name.rsplit(":", 1)[0] + ":" if ":" in name else ""
+        typ = mv.get_object_type_name(oid)
+        if owner not in prefixes or typ not in ("Point", "Box"):
+            continue
+        for prop in ("global_position", "global_rotation") if typ == "Box" else ("global_position",):
+            try:
+                did = transform_id(scene, oid, prop)
+                snap[did] = [dv.get_data_value(did, f) for f in frames]
+            except Exception:
+                continue
+    return snap
+
+
+def _comparable(value):
+    import numpy as np
+
+    if hasattr(value, "to_quaternion"):
+        q = value.to_quaternion()
+        v = np.array([q.w(), q.x(), q.y(), q.z()], dtype=float)
+        return v if v[0] >= 0 else -v
+    return np.asarray(value, dtype=float).ravel()
+
+
+def restore_characters(scene, snap, frames):
+    """Write back snapshot values that changed; returns (values written, values still off)."""
+    import numpy as np
+
+    dv = scene.data_viewer()
+
+    def off(did, i):
+        return not np.allclose(_comparable(dv.get_data_value(did, frames[i])), _comparable(snap[did][i]), atol=1e-3)
+
+    changed = [(did, i) for did in snap for i in range(len(frames)) if off(did, i)]
+    if changed:
+        by_frame = {}
+        for did, i in changed:
+            by_frame.setdefault(i, []).append(did)
+
+        def edit(me, ue, su, session):
+            for i, dids in sorted(by_frame.items()):
+                for did in dids:
+                    me.data_editor().set_data_value(did, frames[i], snap[did][i])
+                su.run_update(set(snap), frames[i])
+
+        scene.modify_update_with_session("MCP keep other characters", edit)
+    worst_cm = worst_deg = 0.0
+    for did in snap:
+        for i in range(len(frames)):
+            a, b = _comparable(dv.get_data_value(did, frames[i])), _comparable(snap[did][i])
+            if len(a) == 4:
+                worst_deg = max(worst_deg, float(np.degrees(2 * np.arccos(min(1.0, abs(np.dot(a, b)))))))
+            else:
+                worst_cm = max(worst_cm, float(np.linalg.norm(a - b)))
+    return len(changed), dict(max_position_cm=round(worst_cm, 3), max_rotation_deg=round(worst_deg, 3))
+
+
+def physics_snap(scene, app, bridge_state, p):
+    """Snap the animation to the AutoPhysics result.
+
+    Snap applies to every character in the scene (selection, locked tracks and the physics
+    behaviour properties do not limit it; verified with two characters). `character` (name
+    prefix, "" = the unprefixed one) keeps the others: their per-frame data is recorded before
+    the snap and written back after it. Snap is synchronous but uses the current simulation:
+    right after AutoPhysics is switched on the simulation is not computed yet and a snap
+    changes nothing, so when this call has to switch it on it does not snap.
+    With Secondary/Compensation/Separation motion or smoothing enabled Cascadeur opens a
+    modal "apply only once" warning; `answer` ("Yes" disables those features after snapping,
+    "No" keeps them) is pressed automatically.
     """
     if qt_gui(bridge_state) is None:
         raise RuntimeError(
             "Needs the PySide6 bridge to verify the physics state and dialogs."
         )
+    character = p.get("character")
+    prefixes = character_prefixes(scene)
+    if character is not None and character not in prefixes:
+        raise ValueError("Unknown character %r; characters: %s" % (character, prefixes))
     mode = set_mode(app, bridge_state, "AutoPhysicsTool.Switch Auto Physics", True)
     if not mode["after"]:
         raise RuntimeError("Could not enable AutoPhysics.")
+    if mode["changed"]:
+        return dict(
+            snapped=False,
+            physics_enabled_now=True,
+            note="AutoPhysics was off and is computing now; a snap now would change nothing. "
+            "Call physics_snap again once the simulation is ready (about 30 s for a short clip; "
+            "the green assistant ghosts are shown).",
+        )
+    others = [c for c in prefixes if character is not None and c != character]
+    frames = list(range(scene.data_viewer().get_animation_size()))
+    kept = snapshot_characters(scene, others, frames) if others else {}
     answer = p.get("answer", "Yes")
     if answer:
         schedule_dialog_answer(bridge_state, answer)
     app.get_action_manager().call_action("AutoPhysicsTool.Snap to Auto Physics")
+    if answer and open_dialogs(bridge_state):
+        answer_dialog(bridge_state, answer)  # the snap runs when the warning is answered
+    written, left = restore_characters(scene, kept, frames) if kept else (0, None)
     return dict(
-        physics_enabled_now=mode["changed"],
+        snapped=True,
+        characters=prefixes,
+        applied_to="all" if character is None else character,
+        kept_unchanged=others,
+        restored_values=written,
+        kept_characters_deviation=left,
         dialog_answer=answer,
-        note="Snap runs asynchronously. Compare cascadeur_sample_motion before/after, render, "
-        "and read cascadeur_ui_state (messages/dialogs) to confirm.",
+        note="Measure the changed character (sample_motion / get_pose before and after) and render.",
     )
 
 
@@ -828,6 +929,10 @@ def autopose(scene, view, app, p, bridge_state):
 
     anchors = [pref(n) for n in (p.get("anchors") or AUTOPOSE_ANCHORS)]
     release = [pref(n) for n in (p.get("release") or []) if pref(n) not in anchors]
+    # A head given to the network brings its up-direction controller along (left locked, it
+    # stays where it was when the body moved: the head tips back or over).
+    if pref("head_MainPoint") in release:
+        release += [n for n in (pref("head_DirectionPoint"),) if n not in anchors + release]
     limit = float(p.get("max_anchor_drift", 3.0))
     include_directions = bool(p.get("include_directions", True))
     # Unnamed direction controllers set the facing of pelvis, chest and head. A locked (blue)
@@ -856,6 +961,17 @@ def autopose(scene, view, app, p, bridge_state):
 
     def read(name, f):
         return np.array(dv.get_data_value(points[name], f), dtype=float).ravel()
+
+    def head_up(f):
+        """Cosine between the head's up (DirectionPoint) and the neck axis (None if missing)."""
+        names = [pref(n) for n in ("neck_01_MainPoint", "head_MainPoint", "head_DirectionPoint")]
+        if any(n not in points for n in names):
+            return None
+        neck, h, hd = (read(n, f) for n in names)
+        a, b = hd - h, h - neck
+        if np.linalg.norm(a) < 1e-6 or np.linalg.norm(b) < 1e-6:
+            return None
+        return round(float(np.dot(a, b) / np.linalg.norm(a) / np.linalg.norm(b)), 2)
 
     def head_facing(f):
         """Cosine between the face direction and the hips' forward (None if the rig lacks them)."""
@@ -1032,16 +1148,28 @@ def autopose(scene, view, app, p, bridge_state):
                         sorted(lock_dirs),
                         blue_released,
                     )
+            # Head checks by meaning (lock state is not readable): the top of the head must point
+            # along the neck and the face the way the hips face; otherwise the controller that
+            # sets it is locked at a stale place - toggle it, keep the toggle only if it helps.
             head_label = next((k for k in state["directions"] if k.startswith("head")), None)
-            head_before = head_facing(f)
-            head_fixed = None
-            if fix_head and head_label and head_before is not None and head_before < 0 \
-                    and not status.startswith("restored"):
-                attempt(f, [], {head_label})  # toggle the head facing, Update
-                head_fixed = head_facing(f)
-                if head_fixed < head_before:
-                    attempt(f, [], {head_label})  # worse: toggle back
-                    head_fixed = head_facing(f)
+            head_checks = {}
+            if fix_head and not status.startswith("restored"):
+                for check, measure, toggle in (
+                    ("head_up", head_up, ([pref("head_DirectionPoint")], set())),
+                    ("head_facing", head_facing, ([], {head_label} if head_label else set())),
+                ):
+                    first_value = measure(f)
+                    if first_value is None or first_value >= 0 or not (toggle[0] or toggle[1]):
+                        head_checks[check] = first_value
+                        continue
+                    attempt(f, *toggle)
+                    fixed = measure(f)
+                    if fixed < first_value:
+                        attempt(f, *toggle)  # worse: toggle back
+                        fixed = measure(f)
+                    head_checks[check] = "%s -> %s (controller toggled)" % (first_value, fixed)
+            else:
+                head_checks = dict(head_up=head_up(f), head_facing=head_facing(f))
             after = {n: read(n, f) for n in points}
             moved = {n: float(np.linalg.norm(after[n] - before[n])) for n in points}
             report.append(
@@ -1051,7 +1179,7 @@ def autopose(scene, view, app, p, bridge_state):
                     controllers=count,
                     missing_anchors=missing,
                     anchor_drift_cm=round(max(moved[n] for n in anchors), 2),
-                    head_facing=head_before if head_fixed is None else "%s -> %s (head direction toggled)" % (head_before, head_fixed),
+                    **head_checks,
                     moved_cm={
                         n: round(v, 1)
                         for n, v in sorted(moved.items(), key=lambda x: -x[1])

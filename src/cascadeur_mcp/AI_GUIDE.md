@@ -151,14 +151,28 @@ Verified 2026-09-30 with UE5 Manny + UE5 Quinn (`cascadeur-work/animations/duo_t
   their direction points, thighs, upperarms, hands with direction/additional points) - a rotation keeps
   sides (left stays left) - and run autopose with `include_directions=false`. Thighs and upperarms carry
   the new facing of pelvis and chest; their unnamed direction controllers still point the old way.
-- **Head after a turn**: its direction controller stays locked backwards. `fix_head_facing` (default, when
-  the head is not an anchor) compares the face with the hips' forward, flips the head direction controller
-  if it looks backwards and reports `head_facing` (cosine, 1.0 = straight ahead). Check it in the report.
+- **Head**: its controllers keep their old place when the body moves (after a turn the face looks backwards;
+  after a jump the up-direction stays at standing height and the head tips back). A head released to the
+  network takes `head_DirectionPoint` along automatically, and `fix_head_facing` (default, when the head is
+  not an anchor) checks by meaning - `head_up` (head top along the neck) and `head_facing` (face vs hips
+  forward), cosines in the report, 1.0 = straight - and toggles the controller when one is negative.
+  AutoPosing's lock state is not readable: a green controller with a stable prediction does not move in
+  Update either, so released points that stay put are toggled back instead of being locked.
 - **Check the other character**: the autopose report lists moved points of both characters; the other
-  character must not move.
-- **Physics**: `physics_priority_frames` takes `character` (each character has its own Center of Mass).
-  Which character `physics_snap` affects in a multi-character scene is NOT verified yet (a snap with Quinn
-  selected changed neither character); test on a copy and measure both before relying on it.
+  character must not move. Check heads on every frame, not only keys (`duo_physics` had one bad key that
+  spoiled 6 in-betweens).
+- **AutoPhysics per character** (verified on `duo_physics_done.casc`, both characters jumping with a hover
+  that physics must remove):
+  - Snap is synchronous but uses the current simulation. Right after AutoPhysics is switched on the
+    simulation is not computed and a snap silently changes nothing; `physics_snap` therefore only switches
+    it on and asks to be called again (~30 s for a short clip). Reopening a scene switches it off.
+  - Snap always applies to every character: selection (a point, the whole character, a track interval),
+    locked tracks, `Auto physics apply` keep_global_*, the Center of Mass `frame_weight` and hiding the
+    AutoPhysics behaviour do not limit it; deleting that behaviour disables physics for everyone.
+  - `physics_snap(character="character1:")` (or `""` for the unprefixed one) records the controller
+    transforms of the other characters, snaps and writes them back: measured deviation of the kept
+    character 0.02 cm / 0.2°, the snapped one moved up to 13.7 cm. Without `character` all are snapped.
+  - `physics_priority_frames` takes `character` (each character has its own Center of Mass).
 
 ## Body animation workflow (Cascadeur's own pipeline)
 

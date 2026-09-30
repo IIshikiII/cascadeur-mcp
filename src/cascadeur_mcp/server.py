@@ -347,9 +347,9 @@ def create_server(bridge: Bridge):
         return await call("physics_settings", set=set or {})
 
     @server.tool(annotations=edit)
-    async def cascadeur_physics_snap(answer: str = "Yes") -> dict:
-        """Enable AutoPhysics if needed and snap the animation to the physics result. With secondary features on, Cascadeur asks whether to disable them (they apply once): `answer` is pressed automatically ("Yes" disables them, "No" keeps them). Mark contacts and priority frames first; sample motion before/after and render to verify."""
-        return await call("physics_snap", answer=answer)
+    async def cascadeur_physics_snap(answer: str = "Yes", character: str | None = None) -> dict:
+        """Snap the animation to the AutoPhysics result. If AutoPhysics was off, it is switched on and nothing is snapped: the simulation needs time (~30 s for a short clip), call again then. Snap itself applies to every character; `character` (name prefix, "" = the unprefixed one) keeps the other characters exactly as they were (their data is restored after the snap). With secondary features on, Cascadeur asks whether to disable them (they apply once): `answer` is pressed automatically ("Yes" disables them, "No" keeps them). Mark contacts and priority frames first; sample motion before/after and render to verify."""
+        return await call("physics_snap", answer=answer, character=character)
 
     @server.tool(annotations=edit)
     async def cascadeur_set_contacts(
