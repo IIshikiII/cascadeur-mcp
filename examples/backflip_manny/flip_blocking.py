@@ -1,6 +1,7 @@
 """Backflip for UE5 Manny, blocked pose-to-pose like an animator (see cascadeur-mcp/docs/AI_GUIDE.md).
 
-Only the MAIN controllers are placed (pelvis, chest, head, hands, feet); AutoPosing solves the rest.
+Only the MAIN controllers are placed (pelvis, chest, hands, feet); AutoPosing solves the rest, head and
+shoulders included (anchor them only when the shot needs a gaze or shoulder pose).
 Levels: 1 = story poses, 2 = breakdowns, 3 = spline fixes. Physics comes last.
 
     python flip_blocking.py write 16,22,32     write main controllers of these key poses
@@ -41,20 +42,18 @@ POSES = {
 MAIN = [
     "pelvis_MainPoint", "pelvis_AdditionalPoint",
     "spine_04_MainPoint", "spine_04_AdditionalPoint",
-    "head_MainPoint", "head_DirectionPoint",
     "hand_MainPoint_l", "hand_DirectionPoint_l", "hand_MainPoint_r", "hand_DirectionPoint_r",
     "foot_MainPoint_l", "foot_MainPoint_r", "ball_MainPoint_l", "ball_MainPoint_r",
 ]
 # Positions AND orientation of every end: a position-only anchor lets AutoPosing turn the torso or a
 # foot 180 degrees about its own axis (it did on the inverted tuck: crossed limbs, feet inside out).
-ANCHORS = ["pelvis_MainPoint", "pelvis_AdditionalPoint", "spine_04_MainPoint", "spine_04_AdditionalPoint",
-           "head_MainPoint", "head_DirectionPoint"]
+ANCHORS = ["pelvis_MainPoint", "pelvis_AdditionalPoint", "spine_04_MainPoint", "spine_04_AdditionalPoint"]
 ANCHORS += [f"{p}_{s}" for s in "lr" for p in ("hand_MainPoint", "hand_DirectionPoint", "hand_AdditionalPoint",
                                                 "foot_MainPoint", "ball_MainPoint", "ball_DirectionPoint",
                                                 "ball_AdditionalPoint")]
 # direction vectors that must match the target (name: (from, to))
-AXES = {"pelvis": ("pelvis_MainPoint", "pelvis_AdditionalPoint"), "chest": ("spine_04_MainPoint", "spine_04_AdditionalPoint"),
-        "head": ("head_MainPoint", "head_DirectionPoint")}
+# (the head is AutoPosing's: not a target, not verified here)
+AXES = {"pelvis": ("pelvis_MainPoint", "pelvis_AdditionalPoint"), "chest": ("spine_04_MainPoint", "spine_04_AdditionalPoint")}
 for _s in "lr":
     AXES.update({f"hand_dir_{_s}": (f"hand_MainPoint_{_s}", f"hand_DirectionPoint_{_s}"),
                  f"hand_add_{_s}": (f"hand_MainPoint_{_s}", f"hand_AdditionalPoint_{_s}"),

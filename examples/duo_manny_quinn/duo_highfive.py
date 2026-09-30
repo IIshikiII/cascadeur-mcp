@@ -62,27 +62,28 @@ if __name__ == "__main__":
         m = pose(names, 0)
         # Quinn stands like Manny, turned 180 degrees about Y: (x, y, z) -> (-x, y, DIST - z).
         # A rotation keeps sides: Manny's left foot maps to Quinn's left foot (now at -X).
-        # Thighs and shoulders carry the new facing of pelvis and chest (their direction
-        # controllers still point the old way and are left to the network).
+        # A turn is a task that needs the shoulders: thighs and upperarms carry the new facing of
+        # pelvis and chest (their direction controllers still point the old way). Everywhere else
+        # shoulders and head stay with AutoPosing.
         target = {Q + n: np.array([-v[0], v[1], DIST - v[2]]) for n, v in m.items()}
         for n in BODY + TURN:  # Quinn's pelvis sits 1.7 cm higher than Manny's (rest poses)
             target[Q + n] = target[Q + n] + [0, 1.7, 0]
         for f in (0, 20):
             write(f, target)
-            solve(f, "quinn", names, release=["head_MainPoint"])
+            solve(f, "quinn", names)
     elif cmd == "five":
         meet = np.array([-20.0, 150.0, DIST / 2])
         write(20, {"hand_MainPoint_r": meet + [0, 0, -3], Q + "hand_MainPoint_l": meet + [0, 0, 3]})
-        free = ["head_MainPoint", "hand_MainPoint_l"]
+        free = ["hand_MainPoint_l"]
         solve(20, "manny", BODY + FEET + ["hand_MainPoint_r"], release=free)
         # Quinn keeps her thighs: her pelvis direction controller still points the pre-turn way.
         # The raised hand's orientation points were locked by `face`; the network picks them now.
         thighs = ["thigh_MainPoint_l", "thigh_MainPoint_r"]
         solve(20, "quinn", BODY + FEET + thighs + ["hand_MainPoint_l"],
-              release=["head_MainPoint", "hand_DirectionPoint_l", "hand_AdditionalPoint_l"])
+              release=["hand_DirectionPoint_l", "hand_AdditionalPoint_l"])
     elif cmd == "solve":
         f, who = int(sys.argv[2]), sys.argv[3]
-        solve(f, who, BODY + FEET, release=["head_MainPoint"])
+        solve(f, who, BODY + FEET)
     elif cmd == "report":
         p = pose(REPORT + [Q + n for n in REPORT], int(sys.argv[2]))
         print(json.dumps({n: np.round(v, 1).tolist() for n, v in p.items()}))

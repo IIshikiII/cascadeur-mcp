@@ -849,17 +849,30 @@ def restore_minimized_window():
 
 
 AUTOPOSE_ANCHORS = (
+    "pelvis_MainPoint",
+    "spine_04_MainPoint",
     "hand_MainPoint_r",
     "hand_MainPoint_l",
     "foot_MainPoint_r",
     "foot_MainPoint_l",
-    "toe_MainPoint_r",
-    "toe_MainPoint_l",
-    "toe_DirectionPoint_r",
-    "toe_DirectionPoint_l",
-    "pelvis_MainPoint",
-    "chest_MainPoint",
+    "ball_MainPoint_r",
+    "ball_MainPoint_l",
+)
+# Head, neck and shoulders belong to AutoPosing: it turns the head and sets the shoulders better than
+# fixed targets. They are released on every call unless the task needs them (e.g. the character
+# must look somewhere) and they are passed as anchors explicitly.
+AUTOPOSE_FREE = (
     "head_MainPoint",
+    "head_DirectionPoint",
+    "head_AdditionalPoint",
+    "neck_01_MainPoint",
+    "neck_01_AdditionalPoint",
+    "clavicle_MainPoint_l",
+    "clavicle_MainPoint_r",
+    "clavicle_AdditionalPoint_l",
+    "clavicle_AdditionalPoint_r",
+    "upperarm_MainPoint_l",
+    "upperarm_MainPoint_r",
 )
 
 
@@ -927,12 +940,20 @@ def autopose(scene, view, app, p, bridge_state):
     def pref(name):
         return name if not character or name.startswith(character) else character + name
 
+    points_all = {
+        mv.get_object_name(o) for o in mv.get_objects() if mv.get_object_type_name(o) == "Point"
+    }
+    explicit = bool(p.get("anchors"))
     anchors = [pref(n) for n in (p.get("anchors") or AUTOPOSE_ANCHORS)]
+    if not explicit:
+        anchors = [n for n in anchors if n in points_all]
     release = [pref(n) for n in (p.get("release") or []) if pref(n) not in anchors]
-    # A head given to the network brings its up-direction controller along (left locked, it
-    # stays where it was when the body moved: the head tips back or over).
-    if pref("head_MainPoint") in release:
-        release += [n for n in (pref("head_DirectionPoint"),) if n not in anchors + release]
+    # Head, neck and shoulders go to the network unless they are anchors (see AUTOPOSE_FREE).
+    auto_free = [
+        pref(n) for n in AUTOPOSE_FREE
+        if pref(n) in points_all and pref(n) not in anchors and pref(n) not in release
+    ]
+    release += auto_free
     limit = float(p.get("max_anchor_drift", 3.0))
     include_directions = bool(p.get("include_directions", True))
     # Unnamed direction controllers set the facing of pelvis, chest and head. A locked (blue)
@@ -972,6 +993,18 @@ def autopose(scene, view, app, p, bridge_state):
         if np.linalg.norm(a) < 1e-6 or np.linalg.norm(b) < 1e-6:
             return None
         return round(float(np.dot(a, b) / np.linalg.norm(a) / np.linalg.norm(b)), 2)
+
+    def chest_facing(f):
+        """Cosine between the shoulders' forward and the hips' forward (None if missing)."""
+        names = [pref(n) for n in ("thigh_MainPoint_l", "thigh_MainPoint_r", "upperarm_MainPoint_l", "upperarm_MainPoint_r")]
+        if any(n not in points for n in names):
+            return None
+        tl, tr, ul, ur = (read(n, f) for n in names)
+        hips, chest = np.cross(tl - tr, [0.0, 1.0, 0.0]), np.cross(ul - ur, [0.0, 1.0, 0.0])
+        hips[1] = chest[1] = 0.0
+        if np.linalg.norm(hips) < 1e-6 or np.linalg.norm(chest) < 1e-6:
+            return None
+        return round(float(np.dot(hips, chest) / np.linalg.norm(hips) / np.linalg.norm(chest)), 2)
 
     def head_facing(f):
         """Cosine between the face direction and the hips' forward (None if the rig lacks them)."""
@@ -1132,11 +1165,28 @@ def autopose(scene, view, app, p, bridge_state):
                     else lock_dirs
                 )
                 count, missing, toggled, _ = attempt(f, green + blue_released, dir_toggle)
-                if max(np.linalg.norm(read(n, f) - before[n]) for n in anchors) > limit:
+                drift = max(np.linalg.norm(read(n, f) - before[n]) for n in anchors)
+                stale = set()
+                if drift > limit:
+                    # After a turn the chest/head direction controllers are locked the old way
+                    # and pull the anchors (free shoulders do not hold the chest): free them.
+                    stale = {
+                        k for k in state["directions"]
+                        if k not in dir_toggle and (k.startswith("chest") or (fix_head and k.startswith("head")))
+                    }
+                    if stale:
+                        restore(before, f)
+                        attempt(f, [], stale)
+                        drift = max(np.linalg.norm(read(n, f) - before[n]) for n in anchors)
+                if drift > limit:
                     restore(before, f)
+                    if stale:
+                        attempt(f, [], stale, update=False)  # undo the direction toggle
                     attempt(f, green + blue_released, dir_toggle, update=False)  # undo the toggle
                     status = "restored: anchors still drift after locking"
                 else:
+                    if stale:
+                        dir_toggle = set(dir_toggle) | stale
                     # A released point that still did not move was green already (its
                     # prediction is stable); the toggle locked it, so toggle it back.
                     stuck = [n for n in blue_released if np.linalg.norm(read(n, f) - before[n]) < 0.01]
@@ -1146,32 +1196,47 @@ def autopose(scene, view, app, p, bridge_state):
                     status = "ok (toggled %d controllers; locked directions %s, released %s)" % (
                         toggled - len(stuck),
                         sorted(lock_dirs),
-                        blue_released,
+                        blue_released + ["%s direction" % k for k in sorted(stale)],
                     )
             # Head checks by meaning (lock state is not readable): the top of the head must point
             # along the neck and the face the way the hips face; otherwise the controller that
             # sets it is locked at a stale place - toggle it, keep the toggle only if it helps.
             head_label = next((k for k in state["directions"] if k.startswith("head")), None)
-            head_checks = {}
-            if fix_head and not status.startswith("restored"):
-                for check, measure, toggle in (
+            chest_label = next((k for k in state["directions"] if k.startswith("chest")), None)
+            checks = []
+            if pref("upperarm_MainPoint_l") not in anchors and pref("upperarm_MainPoint_r") not in anchors:
+                # free shoulders follow the chest direction controller, stale after a turn
+                checks.append(("chest_facing", chest_facing, ([], {chest_label} if chest_label else set())))
+            if fix_head:
+                checks += [
                     ("head_up", head_up, ([pref("head_DirectionPoint")], set())),
                     ("head_facing", head_facing, ([], {head_label} if head_label else set())),
-                ):
+                ]
+            head_checks = {}
+            if not status.startswith("restored"):
+                for check, measure, toggle in checks:
                     first_value = measure(f)
                     if first_value is None or first_value >= 0 or not (toggle[0] or toggle[1]):
                         head_checks[check] = first_value
                         continue
+                    pre = {n: read(n, f) for n in points}
                     attempt(f, *toggle)
                     fixed = measure(f)
-                    if fixed < first_value:
-                        attempt(f, *toggle)  # worse: toggle back
-                        fixed = measure(f)
+                    shifted = max(np.linalg.norm(read(n, f) - pre[n]) for n in anchors)
+                    if fixed < first_value or shifted > limit:
+                        # worse, or the anchors moved (they were not locked): undo
+                        restore(pre, f)
+                        attempt(f, *toggle, update=False)
+                        head_checks[check] = "%s (fix rejected: %s)" % (
+                            first_value, "anchors moved %.1f cm" % shifted if shifted > limit else "worse")
+                        continue
                     head_checks[check] = "%s -> %s (controller toggled)" % (first_value, fixed)
             else:
-                head_checks = dict(head_up=head_up(f), head_facing=head_facing(f))
+                head_checks = dict(head_up=head_up(f), head_facing=head_facing(f), chest_facing=chest_facing(f))
             after = {n: read(n, f) for n in points}
             moved = {n: float(np.linalg.norm(after[n] - before[n])) for n in points}
+            if status.startswith("ok") and max(moved[n] for n in anchors) > limit:
+                status = "WARNING: anchors moved after solving - some were not locked; " + status
             report.append(
                 dict(
                     frame=f,
@@ -1180,6 +1245,7 @@ def autopose(scene, view, app, p, bridge_state):
                     missing_anchors=missing,
                     anchor_drift_cm=round(max(moved[n] for n in anchors), 2),
                     **head_checks,
+                    released_to_autoposing=[n[len(character):] for n in auto_free],
                     moved_cm={
                         n: round(v, 1)
                         for n, v in sorted(moved.items(), key=lambda x: -x[1])

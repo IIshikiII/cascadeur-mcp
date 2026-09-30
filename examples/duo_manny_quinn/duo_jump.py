@@ -19,7 +19,7 @@ CHARS = {"manny": ("", 1.0), "quinn": (Q, -1.0)}  # prefix, forward sign along Z
 ANCHORS = ["pelvis_MainPoint", "spine_04_MainPoint"] + [
     f"{n}_{s}" for s in "lr" for n in (
         "foot_MainPoint", "ball_MainPoint", "ball_DirectionPoint", "thigh_MainPoint",
-        "upperarm_MainPoint", "hand_MainPoint", "hand_DirectionPoint", "hand_AdditionalPoint")]
+        "hand_MainPoint", "hand_DirectionPoint", "hand_AdditionalPoint")]
 LOWER = ("foot_", "ball_")
 TRACKED = ["pelvis_MainPoint", "spine_04_MainPoint", "head_MainPoint", "foot_MainPoint_l", "hand_MainPoint_r"]
 
@@ -61,7 +61,7 @@ def build():
                                           for n, v in t.items()]) for f, t in plan.items()]
         rpc("animate_transforms", keyframes=kfs, interpolation="BEZIER")
         for frames in ([8, 14], [20, 28]):
-            r = rpc("autopose", frames=frames, anchors=ANCHORS, release=["head_MainPoint"],
+            r = rpc("autopose", frames=frames, anchors=ANCHORS,
                     include_directions=False, character=prefix)
             for fr in r["frames"]:
                 print(who, fr["frame"], fr["status"], "drift", fr["anchor_drift_cm"], "head", fr["head_facing"])
@@ -80,7 +80,7 @@ def hang():
         kfs = [dict(frame=f, transforms=[dict(object=n, space="global", position=[round(float(x), 3) for x in v])
                                           for n, v in top.items()]) for f in (11, 17)]
         rpc("animate_transforms", keyframes=kfs, interpolation="BEZIER")
-        r = rpc("autopose", frames=[11, 17], anchors=ANCHORS, release=["head_MainPoint"],
+        r = rpc("autopose", frames=[11, 17], anchors=ANCHORS,
                 include_directions=False, character=prefix)
         for fr in r["frames"]:
             print(who, fr["frame"], fr["status"], "drift", fr["anchor_drift_cm"], "head", fr["head_facing"])

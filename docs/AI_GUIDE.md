@@ -22,6 +22,16 @@ Full details: `docs/FIELD_NOTES.md` in the server repository. The short version:
 - Writing on a non-key frame is overwritten by interpolation. Key first.
 - Leave fingers un-keyed unless every box is calibrated (right hand curls on +X, left on −X, thumb1 on +Z).
 - Knees/elbows: prefer `cascadeur_autopose` (anchors in, AutoPosing solves the rest) over computing them.
+- **Head and shoulders belong to AutoPosing** (user rule). It turns the head and sets the shoulders
+  (clavicle/upperarm) better than fixed targets. Anchor them - never write their targets - only when the
+  task needs it: the user said where the character looks, or your own plan for the shot requires a gaze or
+  a shoulder pose (e.g. a 180° turn needs upperarms for the chest facing). `autopose` releases head, neck,
+  clavicle and upperarm controllers on every call unless they are in `anchors` (report:
+  `released_to_autoposing`). A neck left locked by an earlier call was found this way.
+- AutoPosing lock state (blue/green) is shown in Object properties of a controller: Input point → Locked
+  (a QML `BoolProperty`). The Python API has no access to the tool model, and the panel refreshes only
+  between bridge calls, so `autopose` still infers locks from motion - check `status` for "WARNING" and
+  render after big moves (turns, jumps) instead of trusting the numbers.
 - Contacts: `cascadeur_set_contacts` (fulcrum keys on the tracks of toe/heel points + point Fulcrum State
   enforce/auto/never). Physics: `cascadeur_set_mode("physics")`, `cascadeur_physics_settings`,
   `cascadeur_physics_priority_frames`, `cascadeur_physics_snap(answer="Yes")` (answers the modal
@@ -78,8 +88,9 @@ of swinging forward), toe roll at takeoff/landing.
 - Write the pose with `animate_transforms`, then **key every track, fingers included** (`set_keys` on
   `Fingers_L/R`): a key on only some tracks shows rose/red on the timeline, on all tracks blue.
 - `cascadeur_autopose` with **orientation locked** (`include_directions=true`, anchors = pelvis, chest
-  Main+Additional, hands, feet incl. `ball_Direction/AdditionalPoint`) and `release` = head, hand direction,
-  knees, elbows. **Give the head to AutoPosing whenever possible.** Without orientation anchors the network
+  Main+Additional, hands, feet incl. `ball_Direction/AdditionalPoint`) and `release` = hand direction,
+  knees, elbows. Head and shoulders are released automatically; do not place them in story poses unless
+  the shot needs a gaze or shoulder pose. Without orientation anchors the network
   turned an inverted torso 180° (crossed limbs, feet inside out).
 - Interpolation `STEP` while blocking.
 - Check in the SCENE (not your own numbers): left points on the left, knee/elbow bend direction, capsule
