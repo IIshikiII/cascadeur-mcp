@@ -20,13 +20,21 @@ def test_paths_cannot_escape_workspace_or_overwrite_implicitly(tmp_path):
     for value in ("relative.casc", str(workspace / ".." / "private.casc")):
         with pytest.raises(ValueError):
             file_path(value, state)
-    (workspace / "symlink.casc").symlink_to(outside)
-    with pytest.raises(ValueError, match="outside"):
-        file_path(str(workspace / "symlink.casc"), state, exists=True)
+    try:
+        (workspace / "symlink.casc").symlink_to(outside)
+    except OSError:
+        symlinks = False  # Windows without admin rights or Developer Mode
+    else:
+        symlinks = True
+    if symlinks:
+        with pytest.raises(ValueError, match="outside"):
+            file_path(str(workspace / "symlink.casc"), state, exists=True)
     with pytest.raises(ValueError, match="exists"):
         file_path(str(inside), state)
     assert file_path(str(inside), state, overwrite=True) == inside
     assert file_path(str(inside), state, exists=True, suffix={".casc"}) == inside
+    if not symlinks:
+        pytest.skip("symlinks unavailable: the symlink escape check was not run")
 
 
 @pytest.mark.parametrize("value", [-1, True, 1.5, 100001])
