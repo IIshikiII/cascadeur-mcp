@@ -697,10 +697,13 @@ def physics_priority_frames(scene, p):
 
 
 def restore_minimized_window():
-    """Un-minimize the Cascadeur window without focusing it (Windows only).
+    """Restore a minimized Cascadeur main window (Windows only).
 
     Viewport renders are queued until the window repaints; a minimized window never does,
-    so captures silently wait until the user restores it.
+    so captures silently wait until the user restores it. Only the visible, titled main window
+    is touched. SW_SHOWNOACTIVATE was tried first and left the window "visible" but parked at
+    the minimized position (-25600, -25600 at 125% DPI), i.e. invisible to the user; a plain
+    SW_RESTORE is used instead, also for a window stuck at such coordinates.
     """
     import os
     import sys
@@ -717,13 +720,21 @@ def restore_minimized_window():
     def collect(hwnd, _):
         owner = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-        if owner.value == pid and user32.IsIconic(hwnd):
-            found.append(hwnd)
+        if (
+            owner.value == pid
+            and user32.IsWindowVisible(hwnd)
+            and user32.GetWindowTextLengthW(hwnd) > 0
+            and user32.GetParent(hwnd) == 0
+        ):
+            rect = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            if user32.IsIconic(hwnd) or rect.left < -10000 or rect.top < -10000:
+                found.append(hwnd)
         return True
 
     user32.EnumWindows(collect, 0)
     for hwnd in found:
-        user32.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
     return bool(found)
 
 
@@ -764,6 +775,7 @@ def autopose(scene, view, app, p, bridge_state):
     anchors = list(p.get("anchors") or AUTOPOSE_ANCHORS)
     release = [n for n in (p.get("release") or []) if n not in anchors]
     limit = float(p.get("max_anchor_drift", 3.0))
+    include_directions = bool(p.get("include_directions", True))
     frames = [frame_number(f) for f in p["frames"]]
     if not frames or len(frames) > 200:
         raise ValueError("Provide 1 to 200 key frames.")
@@ -827,23 +839,44 @@ def autopose(scene, view, app, p, bridge_state):
                 directions.append(t)
         return tools, by_name, directions
 
+    def tool_positions(tool_ids):
+        pivot = scene.selector().pivot()
+        out = {}
+        for t in tool_ids:
+            pivot.select(t)
+            out[t] = np.array(pivot.position(), dtype=float).ravel()
+        return out
+
     def attempt(f, toggle_names, toggle_directions, update=True):
-        """Mode on -> SwitchLock the named controllers -> Update -> mode off."""
+        """Mode on -> SwitchLock the named controllers -> Update -> mode off.
+
+        toggle_directions: True = every direction controller, or a set of their indices (sorted
+        by position) to toggle. Returns the indices of direction controllers that moved in Update
+        (those are green: predicted by the network)."""
         am.call_action("AutoPosingTool.AutoPosing")  # on: controllers sync to the rig
         try:
             tools, by_name, directions = controllers(f)
             if not tools:
                 raise RuntimeError("No AutoPosing controllers found for this rig.")
+            directions = sorted(directions, key=lambda t: tuple(np.round(tool_positions([t])[t], 1)))
             toggle = {by_name[n] for n in toggle_names if n in by_name}
-            if toggle_directions:
+            if toggle_directions is True:
                 toggle |= set(directions)
+            elif toggle_directions:
+                toggle |= {directions[i] for i in toggle_directions if i < len(directions)}
             if toggle:
                 select(toggle)
                 am.call_action("AutoPosingTool.SwitchLock")
+            before_dirs = tool_positions(directions)
             if update:
                 am.call_action("AutoPosingTool.Update")
+            after_dirs = tool_positions(directions)
+            moved_dirs = {
+                i for i, t in enumerate(directions)
+                if np.linalg.norm(after_dirs[t] - before_dirs[t]) > 0.5
+            }
             select(set())
-            return len(tools), [n for n in anchors if n not in by_name], len(toggle)
+            return len(tools), [n for n in anchors if n not in by_name], len(toggle), moved_dirs
         finally:
             am.call_action(
                 "AutoPosingTool.AutoPosing"
@@ -860,9 +893,9 @@ def autopose(scene, view, app, p, bridge_state):
         for f in frames:
             scene.set_current_frame(f)
             before = {n: read(n, f) for n in points}
-            count, missing, _ = attempt(
+            count, missing, _, green_dirs = attempt(
                 f, [], False
-            )  # probe: which anchors are active?
+            )  # probe: which anchors (and direction controllers) are active?
             moved = {
                 n: float(np.linalg.norm(read(n, f) - before[n]))
                 for n in set(anchors) | set(release)
@@ -870,22 +903,27 @@ def autopose(scene, view, app, p, bridge_state):
             green = [n for n in anchors if moved[n] > limit]
             # An active controller does not move at all during Update; release those.
             blue_released = [n for n in release if moved[n] < 0.01]
+            # Orientation of pelvis/chest/head/hands/feet lives on direction controllers; left
+            # green, the network may turn a body part 180 degrees about its own axis.
+            lock_dirs = green_dirs if include_directions else set()
             status, toggled = "ok (anchors already active)", 0
-            if green or blue_released:
+            if green or blue_released or lock_dirs:
                 restore(before, f)
                 mostly_green = len(green) > len(anchors) // 2
-                count, missing, toggled = attempt(
-                    f, green + blue_released, mostly_green
+                count, missing, toggled, _ = attempt(
+                    f, green + blue_released, True if mostly_green and not include_directions else lock_dirs
                 )
                 if max(np.linalg.norm(read(n, f) - before[n]) for n in anchors) > limit:
                     restore(before, f)
                     attempt(
-                        f, green + blue_released, mostly_green, update=False
+                        f, green + blue_released,
+                        True if mostly_green and not include_directions else lock_dirs, update=False
                     )  # undo the lock toggle
                     status = "restored: anchors still drift after locking"
                 else:
-                    status = "ok (toggled %d controllers, released %s)" % (
+                    status = "ok (toggled %d controllers incl. %d directions, released %s)" % (
                         toggled,
+                        len(lock_dirs),
                         blue_released,
                     )
             after = {n: read(n, f) for n in points}

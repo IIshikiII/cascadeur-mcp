@@ -7,7 +7,8 @@
 3. Call `cascadeur_rig_summary` and `cascadeur_list_tracks`. Use returned IDs or exact, unique names.
 4. Save a new `.casc` checkpoint with `cascadeur_save_scene` before changing animation.
 5. Establish the action, duration, reference, frame rate, contacts and delivery format with the user. The server uses frame numbers; it does not silently change FPS.
-6. Author a few body poses, verify them, then add breakdowns and finger detail.
+6. Follow **"Proven workflow: pose-to-pose with approval gates"** below. It is the way the user wants
+   animation built; the stages end with the user's approval, not with your own judgement.
 7. Read intermediate poses and capture body and hand views. Save, reopen and inspect the export.
 
 ## Field-tested essentials
@@ -56,17 +57,124 @@ The server gives access to animation controls. It does not generate a finished p
 
 Tool names in this table have the `cascadeur_` prefix. `cascadeur://guide` serves this document, and `cascadeur://scene` serves the current scene summary.
 
-## Body animation workflow
+## Proven workflow: pose-to-pose with approval gates (read this first)
 
-- Start with intent and reference. Identify weight-bearing feet/hands, support changes, center-of-mass travel and the main line of action.
-- Block strong key poses with `STEP` when timing needs to stay explicit. Inspect front and side silhouettes, limb lengths, balance and intersections.
-- Use Point controllers for body placement and IK-style limb motion; use Box rotations where the rig supports them. Editing a joint directly can be overwritten when Cascadeur solves the rig.
-- Use exact IDs. If several characters share names, name-only edits are ambiguous and are rejected.
-- Add keys on the tracks needed to preserve contacts and intended holds. `set_keys` and `animate_transforms` allocate the underlying data as well as keys.
-- Change to `BEZIER`, `CLAMPED_BEZIER`, `LINEAR`, or another supported interpolation deliberately. Bezier can overshoot. Fixed interpolation is baked data and behaves differently from spline interpolation.
-- Inspect frames between the keys, especially around contact changes and extremes. Smooth curves do not necessarily mean natural motion.
-- Use physics previews and corrections after the primary poses and timing make sense. Save before applying corrections. Check resulting poses rather than assuming the physics tool preserved the performance.
-- Finish with overlap, recovery, secondary motion, hand shape, and clean contacts. Avoid dense keys everywhere unless baking is intentional.
+Worked out with the user on a UE5 Manny backflip (2026-09-30, `cascadeur-work/animations/flip_blocking.casc`).
+Earlier attempts that computed the whole motion at once and then patched it (dense keys, formula IK,
+AI Inbetweening over fast rotations, physics snap on an unfinished animation) were rejected as jerky and
+broken. Work like an animator, level by level, and **stop for the user's approval at every gate**.
+Each approved stage is saved; the next stage continues in a **copy** of the scene.
+
+### Stage 0 — plan (no scene edits)
+Timeline (fps, loop), phases, contact changes, takeoff/landing frames. List in advance where knees/elbows
+can go wrong: inverted or horizontal bodies (AutoPosing is trained on upright people), limbs passing
+through straight, big rotations between keys, arm swings (the shortest rotation abducts sideways instead
+of swinging forward), toe roll at takeoff/landing.
+
+### Stage 1 — story poses (4–6 poses) → **gate: user approves each pose**
+- Build each pose from a few big masses: pelvis, chest, hands, feet. Let AutoPosing and the rig solve the
+  rest. The user fixed our best tuck by *only nudging the pelvis*; the rig then curled the upper back,
+  opened the hips and relaxed the arms. Try one big-mass move + re-solve before rebuilding a pose.
+- Write the pose with `animate_transforms`, then **key every track, fingers included** (`set_keys` on
+  `Fingers_L/R`): a key on only some tracks shows rose/red on the timeline, on all tracks blue.
+- `cascadeur_autopose` with **orientation locked** (`include_directions=true`, anchors = pelvis, chest
+  Main+Additional, hands, feet incl. `ball_Direction/AdditionalPoint`) and `release` = head, hand direction,
+  knees, elbows. **Give the head to AutoPosing whenever possible.** Without orientation anchors the network
+  turned an inverted torso 180° (crossed limbs, feet inside out).
+- Interpolation `STEP` while blocking.
+- Check in the SCENE (not your own numbers): left points on the left, knee/elbow bend direction, capsule
+  self-intersections (never excuse one as "soft tissue"), orientation of trunk/hands/feet vs intent,
+  exact L/R symmetry for symmetric moves. Render every pose from 4–5 angles (side, 3/4, front, back, top).
+- Real-body lessons: a tuck gets its roundness from the upper back/neck, not from crushing thighs into the
+  chest; bent takeoff arms with elbows out are natural; tuck hands rest loosely outside the knees.
+
+### Stage 2 — breakdowns by recursive midpoints → **gate: user approves the first two samples**
+The user's idea: between every two existing keys insert the average of its neighbours as a baseline,
+then fix it by meaning; repeat level by level. Averaging raw coordinates collapses the body across big
+rotations, so average **through the rig hierarchy** (reference implementation:
+`examples/backflip_manny/flip_midpoints.py`; poses + scene checks in `flip_blocking.py`; they import
+`mcp_call` from `cascadeur-work/`, so run them from `cascadeur-work/animations`):
+- every Box relative to its parent Box (slerp), every Point in the frame of its own Box → limbs move on
+  arcs, keep their length, and left is only ever mixed with left;
+- the root (`pelvis_Box`) turns as an **angle along the planned direction** (a 190° flip must not take the
+  short way); in the air follow a planned pitch curve (rotation speeds up in the tuck);
+- planted feet stay put in world space, knee re-seated by IK;
+- explicit rules where the shortest rotation is wrong (arm swing back→forward→up goes *through the front*);
+- write Points **and** orientation Boxes (`rotation_quaternion_wxyz`, space global), then re-read the
+  Box rotations to confirm the rig kept them (<2°).
+- **Manny's left and right Boxes are not mirror images**: they differ by 180° about their own X. Mirror a
+  right Box into left convention with `C = conj(mirror(q_r_rest)) * q_l_rest`, or symmetrising turns
+  hands/feet/clavicles by exactly 90°.
+- Write 1–2 sample midpoints first, render, get approval, then do the whole level; then the next level.
+
+### Stage 3 — spline → **gate: user plays it back**
+- Switch keys to `BEZIER`; use `CLAMPED_BEZIER` where Bezier overshoots an extreme (an arm swinging back
+  went straight at 0° bend, then snapped 41°).
+- Check **every frame**, not just keys: sides, bend direction, collisions, symmetry, and bend change per
+  frame (flag > ~20°/frame). Fix a bad span with another midpoint key (a 2-frame arm swing needed a key
+  in the middle), not with dense baking.
+
+### Stage 4 — polish, then physics (each → gate)
+Head/fingers via AutoPosing, contacts on toes/heels, AutoPhysics assistant compared with the character
+*before* snapping; priority frames on the story poses; snap only when the assistant is already close.
+
+### Process rules the user insisted on
+- Report what you are doing in a few words during long operations; never claim a check you did not run.
+- If the user rejects a result, restore exactly (remove the new keys; verify story poses unchanged to 0.000 cm).
+- Closing extra scene tabs programmatically is fine (`app.get_data_source_manager().close_scene(view)`).
+- One open scene, AutoPhysics assistant off while posing, AutoPosing in batches of ≤3 frames (long calls
+  make the bridge heartbeat stale; wait for it instead of retrying).
+
+## Body animation workflow (Cascadeur's own pipeline)
+
+Cascadeur's docs split animation into Reference → Drafting → Spline → Physics → Polishing
+(https://cascadeur.com/help/animation_pipeline). Let the app do the in-betweens, balance and flight;
+your job is a few strong poses, timing, contacts and review. Dense baked keys written from an external
+model are the last resort (for example a fast flip where Inbetweening flips the knees), not the default.
+
+1. **Reference / plan.** Name the phases, the contact changes (which foot/hand supports when), the
+   takeoff and landing frames, the main line of action, and the loop condition.
+2. **Drafting: sparse key poses with AutoPosing.** One key per phase extreme (contact, down, passing,
+   up, apex for a jump). Write only the main controllers (pelvis, chest, head, hands, ankles/toes),
+   then `autopose` so the app solves knees, elbows and the spine. Blue = animator-driven, green = solved;
+   blue state is per keyframe. Don't lock mid-chain points (knees, elbows): that distorts poses. Re-running
+   AutoPosing overwrites manual poses, so hand edits come after it. Block with `STEP` to judge the
+   poses and timing; retime by moving keys, not by adding them. Render each key from the front and the side.
+3. **Spline.** Switch intervals to `BEZIER` (momentum), Bezier viscous (no carried inertia; menu action from `list_actions`, not a `set_interpolation` value),
+   `CLAMPED_BEZIER` (no overshoot, good for planted legs) or `LINEAR`/`STEP` as the motion needs. Use
+   separate tracks only when body parts need different keys or interpolation. For organic in-betweens run
+   `inbetween` (AI; ≤120 frames between neighbouring keys; the result is FIXED per-frame data). Use double
+   keys (adjacent frames) for sharp direction changes. Check trajectories for spacing, loops and overshoot.
+4. **Physics.**
+   - Contacts: `set_contacts` on toes/heels over the planted intervals. Too few fulcrums make AutoPhysics
+     invent ballistic hops; too many freeze the body.
+   - Flight (jumps, flips): select the interval from the last ground frame to the first landing frame on
+     the Center of Mass, then `BallisticTrajectoryTool.Add ballistic trajectory` and
+     `...Snap centers of mass to selected trajectory`. The COM then follows a true parabola.
+   - Rotation in flight: `BallisticTrajectoryTool.Switch ballistic ghosts` shows physically correct
+     orientations from the angular momentum. Mark at most 3–4 poses with `...Set fixation frame for free
+     rotation` (for example takeoff, tuck, landing), then `...Snap orientation to the ghosts of free rotation`.
+   - Whole-animation balance: `physics_preview_toggle` and read the assistant colour (green = ok,
+     red = impossible, fix poses; blue = recomputing). `physics_priority_frames` on the poses that must
+     survive (loop ends, key extremes; few of them), then `physics_snap` (it asks about disabling
+     secondary features; the bridge answers the modal).
+   - Save before each physics step; after it, verify feet, loop ends and heights numerically and visually.
+5. **Polishing.**
+   - `clean_foot_contacts` (Fulcrum Motion Cleaning: pins support feet and removes popping and sliding).
+   - Tween Machine (`TweenMachine.Attract to …`) smooths single frames or intervals toward the
+     previous, next or interpolated position.
+   - Trajectories: remove loops, even out spacing, check rotation curves on all axes.
+   - Secondary motion, with moderate settings: it can make limbs look like sausages.
+   - Fingers with AutoPosing for fingers, or leave them unkeyed if the rig's defaults are good.
+   - Review at slow playback (time factor 0.3).
+6. **Converting a dense/baked result** (mocap, Motion Generation, generated per-frame keys): use
+   `unbake_animation`. `auto_interpolation_keys` puts keys at fulcrum changes and jump apexes,
+   `auto_interpolation_intervals` chooses interpolations, and Auto Unlock turns poses into AutoPosing
+   with the fewest blue points. That gives back an editable, sparse animation.
+
+Always: use exact object IDs, save a checkpoint before any tool that rewrites intervals, and measure
+(jerk profile, foot slide, loop gap) *and* render (front and side at every key and around contact changes).
+Smooth numbers do not prove natural motion.
 
 ## Finger animation: calibration comes first
 
