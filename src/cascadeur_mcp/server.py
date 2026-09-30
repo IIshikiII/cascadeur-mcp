@@ -289,23 +289,20 @@ def create_server(bridge: Bridge):
     async def cascadeur_autopose(
         frames: Frames,
         anchors: Annotated[list[str], Field(max_length=40)] | None = None,
-        include_directions: bool = True,
-        release: Annotated[list[str], Field(max_length=40)] | None = None,
         character: str | None = None,
         tool_seeds: Annotated[list[str], Field(max_length=4)] | None = None,
-        fix_head_facing: bool = True,
     ) -> dict:
-        """Re-solve existing key poses with Cascadeur AutoPosing. Anchor points (default: pelvis, chest, hands, feet, balls) are locked as active controllers; knees, elbows and spine are predicted by the network. Head, neck and shoulders (clavicle/upperarm) are always released to AutoPosing unless passed as anchors - anchor them only when the task needs it (the user asked where the character looks, or the shot requires a gaze/shoulder pose). Frames must already be keys. Returns per-frame displacements; render to verify. Multi-character scenes: `character` is the name prefix (e.g. "character1:"; anchors are prefixed automatically); a character other than the first needs its controller id once: the user clicks one of its controllers in AutoPosing mode, then cascadeur_autopose_seed caches it. When the head is not an anchor, `fix_head_facing` checks that the face points the way the hips do (report: head_facing cosine) and flips the head direction controller if it looks backwards, e.g. after a character turns."""
-        return await call(
-            "autopose",
-            frames=frames,
-            anchors=anchors,
-            include_directions=include_directions,
-            release=release,
-            character=character,
-            tool_seeds=tool_seeds,
-            fix_head_facing=fix_head_facing,
-        )
+        """Re-solve key poses with Cascadeur AutoPosing, with the lock state set EXPLICITLY: every AutoPosing controller's Locked flag (Object properties) is read, set to "locked" for the anchors and "free" for everything else, verified, then Update runs. Default anchors: hands and feet only (hand_l/r, hand_dir, hand_add, toe, toe_dir, toe_add; ankles are always active) - pelvis, spine, chest, neck, head, shoulders and the pelvis/chest/head direction controllers stay free. Move a character (even a 180 deg turn) by moving only hands and feet first. Add an anchor only when the task needs it (a gaze the user asked for, a specific body-part pose) and say why; anchors are controller names (hand_l, head, direction_controller_head) or point names (hand_MainPoint_l). Small touch-ups of other points after the body directions are right are fine when a render shows an anatomy problem. Takes ~15 s per frame. Frames must be keys. Multi-character scenes: `character` is the name prefix ("character1:"); a non-first character needs its controller id once (the user clicks one of its controllers in AutoPosing mode, then cascadeur_autopose_seed caches it). Render to verify."""
+        from .autopose_flow import autopose_explicit
+
+        async def step(method, **params):
+            return await call(method, **params)
+
+        try:
+            return dict(frames=await autopose_explicit(step, frames, anchors, character or "", tool_seeds))
+        except ToolError:
+            await call("set_mode", mode="autoposing", on=False)
+            raise
 
     @server.tool(annotations=read)
     async def cascadeur_autopose_seed() -> dict:

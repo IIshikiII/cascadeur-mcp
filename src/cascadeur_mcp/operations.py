@@ -848,20 +848,22 @@ def restore_minimized_window():
     return bool(found)
 
 
-AUTOPOSE_ANCHORS = (
-    "pelvis_MainPoint",
-    "spine_04_MainPoint",
-    "hand_MainPoint_r",
-    "hand_MainPoint_l",
-    "foot_MainPoint_r",
-    "foot_MainPoint_l",
-    "ball_MainPoint_r",
-    "ball_MainPoint_l",
+# Only hands and feet are locked by default (user rule, 2026-09-30): locked pelvis/chest points,
+# direction controllers, neck or shoulders kept old facings after a turn and hunched the body.
+# Everything else is AutoPosing's; add an anchor only when the task needs it.
+AUTOPOSE_ANCHORS = tuple(
+    "%s_%s" % (n, s_)
+    for s_ in "lr"
+    for n in (
+        "hand_MainPoint", "hand_DirectionPoint", "hand_AdditionalPoint",
+        "foot_MainPoint", "ball_MainPoint", "ball_DirectionPoint", "ball_AdditionalPoint",
+    )
 )
-# Head, neck and shoulders belong to AutoPosing: it turns the head and sets the shoulders better than
-# fixed targets. They are released on every call unless the task needs them (e.g. the character
-# must look somewhere) and they are passed as anchors explicitly.
+# Released on every call unless they are anchors.
 AUTOPOSE_FREE = (
+    "pelvis_MainPoint",
+    "spine_02_MainPoint",
+    "spine_04_MainPoint",
     "head_MainPoint",
     "head_DirectionPoint",
     "head_AdditionalPoint",
@@ -955,7 +957,7 @@ def autopose(scene, view, app, p, bridge_state):
     ]
     release += auto_free
     limit = float(p.get("max_anchor_drift", 3.0))
-    include_directions = bool(p.get("include_directions", True))
+    include_directions = bool(p.get("include_directions", False))
     # Unnamed direction controllers set the facing of pelvis, chest and head. A locked (blue)
     # one keeps its old direction: after a character turns, the head looks backwards. Lock
     # state is not readable (a green controller whose prediction is stable does not move in
@@ -1264,6 +1266,183 @@ def autopose(scene, view, app, p, bridge_state):
         else ui.get("AutoPosingTool.AutoPosing"),
         note="AutoPosing mode is left off; anchors stay active (blue) on processed frames. Render to verify.",
     )
+
+
+# --- AutoPosing lock state through Object properties --------------------------------------
+# The Locked flag of an AutoPosing controller (Object properties -> Input point -> Locked) is
+# the only reliable lock state; the Python API cannot reach the tool model. The panel follows
+# the selection only between bridge calls (never call processEvents), so a client drives one
+# controller per call pair: ap_select_tool, then ap_panel / ap_set_locked. Never click the
+# checkbox with several controllers selected: that closed the Cascadeur window.
+
+
+def _main_window(bridge_state):
+    gui = qt_gui(bridge_state)
+    if gui is None:
+        raise RuntimeError("Needs the PySide6 bridge (pyside6_site).")
+    for window in live_windows(gui):
+        if window.objectName() == "MainWindow":
+            return window
+    raise RuntimeError("Cascadeur main window not found.")
+
+
+def _find_texts(window, labels):
+    found = {}
+
+    def walk(item):
+        text = item.property("text")
+        if isinstance(text, str) and text.strip() in labels and item.property("visible"):
+            found.setdefault(text.strip(), []).append(item)
+        for child in item.childItems():
+            walk(child)
+
+    walk(window.contentItem())
+    return found
+
+
+def _panel_name(items):
+    """The Name field of Object properties (the Outliner header also has a "Name" label)."""
+    for label in items.get("Name", []):
+        for child in label.parentItem().childItems():
+            text = child.property("text")
+            cls = child.metaObject().className()
+            if child is not label and isinstance(text, str) and text.strip() and "Text" in cls                     and text.strip() not in ("Type", "Track", "Name"):
+                return text.strip()
+        for child in label.parentItem().childItems():  # the field may sit one level deeper
+            for sub in child.childItems():
+                text = sub.property("text")
+                if isinstance(text, str) and text.strip() and text.strip() not in ("Type", "Track", "Name"):
+                    return text.strip()
+    return None
+
+
+# Lock flag per controller kind: the Locked row of its section (Input point or Direction controller;
+# a direction controller also has Enabled, which switches the controller itself on or off).
+_LOCK_FLAGS_BY_KIND = (("input", ("Locked", "Input point")), ("direction", ("Locked", "Direction controller")))
+
+
+def ap_tools(scene, view, app, p, bridge_state):
+    """Turn AutoPosing mode on for one character on a frame; list its controllers."""
+    import csc
+    import numpy as np
+
+    character = p.get("character") or ""
+    frame = frame_number(p["frame"])
+    mv, dv = scene.model_viewer(), scene.data_viewer()
+    am = app.get_action_manager()
+    scene.set_current_frame(frame)
+    pref = (lambda n: n if not character or n.startswith(character) else character + n)
+    root = object_id(scene, pref("pelvis_MainPoint"))
+    ui = toolbar_states(bridge_state) or {}
+    if ui.get("AutoPosingTool.AutoPosing"):
+        am.call_action("AutoPosingTool.AutoPosing")  # off: the mode binds to the selection
+    scene.modify_with_session("MCP select character", lambda m, u, sc, s: s.take_selector().select({root}, root))
+    am.call_action("AutoPosingTool.AutoPosing")
+    dvp = view.active_viewport().domain_viewport()
+    dvp.set_mode_visualizers(csc.view.ViewportMode.AutoPosing)
+    own = (lambda n: n.startswith(character) if character else ":" not in n)
+    pose = {
+        mv.get_object_name(o): np.array(dv.get_data_value(transform_id(scene, o, "global_position"), frame), float).ravel()
+        for o in mv.get_objects()
+        if mv.get_object_type_name(o) == "Point" and own(mv.get_object_name(o))
+    }
+    candidates = [c for c in ([list(p["tool_seeds"])] if p.get("tool_seeds") else [])]
+    candidates += load_seed_cache(bridge_state).get(character, []) + [None]
+    pivot = scene.selector().pivot()
+    for candidate in candidates:
+        if candidate is None:
+            am.call_action("Application.Select all")
+            seeds = {i for i in scene.selector().selected().ids if isinstance(i, csc.domain.Tool_object_id)}
+        else:
+            seeds = {csc.domain.Tool_object_id(x) for x in candidate}
+        tools = set()
+        for g in csc.domain.get_all_visible_ids_by_proc(scene, seeds, frame):
+            tools |= {i for i in g if isinstance(i, csc.domain.Tool_object_id)}
+        rows = []
+        for t in tools:
+            pivot.select(t)
+            pos = np.array(pivot.position(), float).ravel()
+            best = min(pose, key=lambda n: np.linalg.norm(pose[n] - pos))
+            near = float(np.linalg.norm(pose[best] - pos))
+            rows.append(dict(id=t.to_string(), point=best if near < 1.0 else None,
+                             position=[round(float(x), 2) for x in pos]))
+        if rows and sum(1 for r in rows if r["point"]) >= len(rows) // 2:
+            scene.modify_with_session("MCP clear", lambda m, u, sc, s: s.take_selector().select(set(), csc.model.ObjectId.null()))
+            return dict(character=character, frame=frame, tools=rows)
+    raise RuntimeError("No AutoPosing controllers of %r; click one in AutoPosing mode and call autopose_seed." % character)
+
+
+def ap_select_tool(scene, p):
+    import csc
+
+    tool = csc.domain.Tool_object_id(p["id"])
+    scene.modify_with_session("MCP select controller", lambda m, u, sc, s: s.take_selector().select({tool}, tool))
+    return dict(selected=len(scene.selector().selected().ids))
+
+
+def _section_flag(window, kind):
+    """(flag label, section header) of the shown controller, searched only inside that section:
+    the panel keeps items of the previous controller alive until Qt deletes them later, and a
+    click on such a stale checkbox is the suspected cause of Cascadeur crashes."""
+    flag, section = dict(_LOCK_FLAGS_BY_KIND)[kind]
+    items = _find_texts(window, {section, flag, "Name"})
+    for header in items.get(section, []):
+        node = header
+        for _ in range(6):
+            node = node.parentItem()
+            if node is None:
+                break
+            hits = []
+
+            def walk(item):
+                text = item.property("text")
+                if isinstance(text, str) and text.strip() == flag and item.property("visible"):
+                    hits.append(item)
+                for child in item.childItems():
+                    walk(child)
+
+            walk(node)
+            if len(hits) == 1:
+                return hits[0], header, items
+            if len(hits) > 1:
+                break
+    return None, (items.get(section) or [None])[0], items
+
+
+def ap_panel(bridge_state, p):
+    """Name and lock flag of the controller shown in Object properties. kind: "input" (Input
+    point -> Locked) or "direction" (Direction controller -> Enabled). A folded section is
+    unfolded; call again to read it."""
+    window = _main_window(bridge_state)
+    kind = p.get("kind", "input")
+    label, header, items = _section_flag(window, kind)
+    name = _panel_name(items)
+    if label is not None:
+        return dict(name=name, flag=label.property("text").strip(),
+                    locked=bool(label.parentItem().parentItem().property("value")))
+    if header is not None:
+        click_item(header)
+        return dict(name=name, locked=None, unfolded=header.property("text").strip())
+    return dict(name=name, locked=None, unfolded=None)  # e.g. ankles: always active
+
+
+def ap_set_locked(scene, bridge_state, p):
+    """Set the lock flag of the single selected controller (click only when it differs)."""
+    if len(scene.selector().selected().ids) != 1:
+        raise RuntimeError("Select exactly one AutoPosing controller (a multi-selection click closed Cascadeur).")
+    window = _main_window(bridge_state)
+    label, _, _ = _section_flag(window, p.get("kind", "input"))
+    if label is None:
+        raise RuntimeError("The lock flag is not shown; call ap_panel first (it unfolds the section).")
+    row = label.parentItem()
+    current = bool(row.parentItem().property("value"))
+    want = bool(p["locked"])
+    if current != want:
+        box = [c for c in row.childItems() if "CheckBox" in c.metaObject().className()]
+        if len(box) != 1:
+            raise RuntimeError("Lock checkbox not found.")
+        click_item(box[0])
+    return dict(before=current, clicked=current != want)
 
 
 def autopose_seed(scene, bridge_state):
@@ -1853,6 +2032,14 @@ def dispatch(method, p, bridge_state):
         return autopose(scene, view, app, p, bridge_state)
     if method == "autopose_seed":
         return autopose_seed(scene, bridge_state)
+    if method == "ap_tools":
+        return ap_tools(scene, view, app, p, bridge_state)
+    if method == "ap_select_tool":
+        return ap_select_tool(scene, p)
+    if method == "ap_panel":
+        return ap_panel(bridge_state, p)
+    if method == "ap_set_locked":
+        return ap_set_locked(scene, bridge_state, p)
     if method == "call_action":
         from .actions import CATALOG, MODES
 

@@ -13,6 +13,7 @@ import numpy as np
 
 sys.path.insert(0, "..")
 from mcp_call import call  # noqa: E402
+from apose import apose  # noqa: E402  (explicit locks: hands and feet only)
 
 Q = "character1:"
 CHARS = {"manny": ("", 1.0), "quinn": (Q, -1.0)}  # prefix, forward sign along Z
@@ -60,11 +61,9 @@ def build():
         kfs = [dict(frame=f, transforms=[dict(object=n, space="global", position=[round(float(x), 3) for x in v])
                                           for n, v in t.items()]) for f, t in plan.items()]
         rpc("animate_transforms", keyframes=kfs, interpolation="BEZIER")
-        for frames in ([8, 14], [20, 28]):
-            r = rpc("autopose", frames=frames, anchors=ANCHORS,
-                    include_directions=False, character=prefix)
-            for fr in r["frames"]:
-                print(who, fr["frame"], fr["status"], "drift", fr["anchor_drift_cm"], "head", fr["head_facing"])
+        # the written pelvis/chest targets are only a start: AutoPosing re-solves them
+        for fr in apose([8, 14, 20, 28], prefix):
+            print(who, fr["frame"], fr["status"], "locked", len(fr["locked"]), "drift", fr["anchor_drift_cm"])
         contacts = [prefix + f"{n}_{s}" for s in "lr" for n in ("ball_MainPoint", "foot_Self0Point")]
         rpc("set_contacts", points=contacts, intervals=[[0, 9], [19, 28]])
     ids_all = rpc("list_tracks")["tracks"]
@@ -80,10 +79,8 @@ def hang():
         kfs = [dict(frame=f, transforms=[dict(object=n, space="global", position=[round(float(x), 3) for x in v])
                                           for n, v in top.items()]) for f in (11, 17)]
         rpc("animate_transforms", keyframes=kfs, interpolation="BEZIER")
-        r = rpc("autopose", frames=[11, 17], anchors=ANCHORS,
-                include_directions=False, character=prefix)
-        for fr in r["frames"]:
-            print(who, fr["frame"], fr["status"], "drift", fr["anchor_drift_cm"], "head", fr["head_facing"])
+        for fr in apose([11, 17], prefix):
+            print(who, fr["frame"], fr["status"], "locked", len(fr["locked"]), "drift", fr["anchor_drift_cm"])
 
 
 def sample(name):

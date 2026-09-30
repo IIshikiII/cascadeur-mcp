@@ -1,4 +1,6 @@
-"""Two-character smoke test in duo_test.casc (run from cascadeur-work/animations as duo_test.py): UE5 Manny + UE5 Quinn (namespace "character1:").
+"""LEGACY (inferred locks, extra anchors): superseded by turn_ends.py + apose.py.
+
+Two-character smoke test in duo_test.casc (run from cascadeur-work/animations as duo_test.py): UE5 Manny + UE5 Quinn (namespace "character1:").
 
 Only anchor points are written; AutoPosing solves the rest of each body.
 
